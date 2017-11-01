@@ -12,9 +12,11 @@ from event_text import event_text_main
 def event_text():
     start_time = time()
     reply_message = event_text_main(**request.json)
-    print([request.json['user_id'][:6], '>', request.json['message'], '\n'])
+
+    user_id = request.json['user_id'][:6] if request.json['user_id'] is not None else None
+    print(user_id, '>', request.json['message'])
     if reply_message is not None:
-        print([request.json['user_id'][:6], '<', reply_message, '(耗時%.3fs)' % (time()-start_time)])
+        print(user_id, '<', reply_message, '(耗時%.3fs)' % (time()-start_time))
         return reply_message
     return ''
 
