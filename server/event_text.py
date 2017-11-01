@@ -68,7 +68,7 @@ def event_push(bot_id, group_id, user_id, message, key, value, **argv):
 def event_list(bot_id, group_id, user_id, message, key, value, **argv):
     if (group_id is None) or (key in cfg['詞組']['自己的']):
         return '、'.join([k.keyword for k in UserKeyword.get(user_id)])
-    else:
+    elif user_id is not None:
         return '、'.join([k.keyword for k in UserKeyword.get(group_id)]) \
                 + '\n\n查詢個人關鍵字輸入 列表=我'
 
@@ -400,19 +400,23 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
         else:
             MessageLogs.add(group_id, user_id, nText=1, nFuck=(message.count('幹') + message.count('fuck')), nLenght=len(message)) #紀錄次數
 
-        reply_message = UserKeyword.get(group_id, message)
-        if reply_message is not None:
-            return later(reply_message.reply)
+        if group_id is not None:
+            reply_message = UserKeyword.get(group_id, message)
+            if reply_message is not None:
+                return later(reply_message.reply)
         
-        reply_message = UserKeyword.get(user_id, message)
-        if reply_message is not None:
-            return later(reply_message.reply)
+        if user_id is not None:
+            reply_message = UserKeyword.get(user_id, message)
+            if reply_message is not None:
+                return later(reply_message.reply)
 
         keys = []
-        for i in UserKeyword.get(group_id):
-            keys.append((i.keyword, i.reply))
-        for i in UserKeyword.get(user_id):
-            keys.append((i.keyword, i.reply))
+        if group_id is not None:
+            for i in UserKeyword.get(group_id):
+                keys.append((i.keyword, i.reply))
+        if user_id is not None:
+            for i in UserKeyword.get(user_id):
+                keys.append((i.keyword, i.reply))
 
         for k, v in keys:
             kn = -1

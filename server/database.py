@@ -51,7 +51,7 @@ class UserKeyword(db.Model):
     @staticmethod
     def get(id, keyword=None):
         if keyword is None:
-            return list(UserKeyword.query.filter_by(id=id))
+            return list(UserKeyword.query.filter_by(id=id).order_by(UserKeyword.level.desc(), UserKeyword._id.desc()))
         else:
             for row in UserKeyword.query.filter_by(id=id, keyword=keyword):
                 return row
