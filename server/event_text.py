@@ -339,6 +339,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                 msg_arr = []
                 msg_weight = 0
 
+                minimum = True
                 minimum_pool = []
                 minimum_pool_get = []
                 for msg in reply_message.split('__'):
@@ -385,7 +386,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                             break
                         else:
                             r -= weight
-                if count >= int(opt.get('保底', 10)) and len(minimum_pool_get) > 0:
+                if minimum and count >= int(opt.get('保底', 10)) and len(minimum_pool_get) > 0:
                      reply_message_new[-2] = choice(minimum_pool_get)
                 reply_message = ''.join(reply_message_new)
                 

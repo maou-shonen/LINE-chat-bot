@@ -233,8 +233,6 @@ order=keyword=content##argv
 ---
 ## 問與答
 
-
-
 ---
 ## 更新紀錄
 * 2017.11.01
