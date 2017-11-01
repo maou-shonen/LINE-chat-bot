@@ -33,6 +33,8 @@ def event_text_main(bot_id, group_id, user_id, message, reply_token, **argv):
             if group_id is not None and UserSettings.check_news(group_id):
                 if reply_message is None:
                     reply_message = cfg['公告']['內容']
+                elif type(reply_message) == str:
+                    reply_message = [reply_message, cfg['公告']['內容']]
                 else:
                     reply_message.append(cfg['公告']['內容'])
 

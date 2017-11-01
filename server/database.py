@@ -15,8 +15,6 @@ db = SQLAlchemy(app)
 
 
 class UserKeyword(db.Model):
-    __tablename__ = 'Keyword'
-
     _id     = db.Column(db.Integer, autoincrement=True, primary_key=True)
     id      = db.Column(db.String(35))
     author  = db.Column(db.String(35))
@@ -164,14 +162,5 @@ class UserSettings(db.Model):
         data = UserSettings.__get(id)
         return json.loads(data.options).get(option, default)
 
-
 if __name__ == '__main__':
     db.create_all()
-
-    for row in UserKeywordOld.query.all():
-        print(row.keyword)
-        db.session.add(UserKeyword(row.id, row.id, row.keyword, row.reply))
-    for row in GroupKeywordOld.query.all():
-        print(row.keyword)
-        db.session.add(UserKeyword(row.id, row.author, row.keyword, row.reply))
-    db.session.commit()
