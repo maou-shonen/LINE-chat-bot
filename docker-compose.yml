@@ -1,0 +1,10 @@
+version: '2'
+
+services:
+   line-bot:
+      build: server
+      restart: always
+      ports:
+         - "9998:5000"
+      #container_name: line
+      
