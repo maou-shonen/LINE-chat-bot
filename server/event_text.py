@@ -67,9 +67,9 @@ def event_push(bot_id, group_id, user_id, message, key, value, **argv):
 @event_register('-l', 'list', '列表')
 def event_list(bot_id, group_id, user_id, message, key, value, **argv):
     if (group_id is None) or (key in cfg['詞組']['自己的']):
-        return '，'.join([k.keyword for k in UserKeyword.get(user_id)])
+        return '、'.join([k.keyword for k in UserKeyword.get(user_id)])
     else:
-        return '，'.join([k.keyword for k in UserKeyword.get(group_id)]) \
+        return '、'.join([k.keyword for k in UserKeyword.get(group_id)]) \
                 + '\n\n查詢個人關鍵字輸入 列表=我'
 
 
@@ -117,7 +117,7 @@ def event_add(bot_id, group_id, user_id, message, key, value, **argv):
     else:
         reply_message.append('\n授權不足 不存入個人關鍵字')
         
-    return '\n'.join(reply_message)
+    return ''.join(reply_message)
 
 
 @event_register('-d', 'delete', 'del', '刪除', '移除', '忘記', '遺忘')
@@ -160,7 +160,7 @@ def event_set(bot_id, group_id, user_id, message, key, value, **argv):
             return '設定完成'
         else:
             return (
-                '目前可使用:\n'
+                '目前可使用:'
                 '設定=全群組關鍵字=開啟/關閉\n(可以使用別的群組的關鍵字)')
 
 
