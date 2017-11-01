@@ -14,6 +14,7 @@ def event_text():
     reply_message = event_text_main(**request.json)
 
     user_id = request.json['user_id'][:6] if request.json['user_id'] is not None else None
+    if request.json['group_id'] is not None: user_id += '@%s' % request.json['group_id'][4]
     print(user_id, '>', request.json['message'])
     if reply_message is not None:
         print(user_id, '<', reply_message, '(耗時%.3fs)' % (time()-start_time))
