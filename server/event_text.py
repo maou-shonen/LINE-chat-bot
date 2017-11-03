@@ -436,7 +436,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
 
         #使用全群組的關鍵字 限無**
         if UserSettings.get(group_id, 'all_group_keyword', False):
-            for k in UserKeyword.query.filter_by(super=0, keyword=message).order_by(Keyword._id.desc()):
+            for k in UserKeyword.query.filter_by(super=0, keyword=message).order_by(UserKeyword._id.desc()):
                 return later(k.reply)
 
     else:
