@@ -371,7 +371,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                 else:
                     seed = 0
                     count = int(message[message.rfind('*')+1:]) if '*' in message and message[message.rfind('*')+1:].isdigit() else 1
-                    if count > 20: count = 20
+                    if count > 100: count = 100
                     if count <  1: count = 1
 
                 reply_message_new = []
@@ -381,14 +381,19 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                         if r <= weight:
                             if msg in minimum_pool:
                                 minimum = False #抽中保底池 保底取消
-                            if count > 1: reply_message_new.extend([str(i+1), '. '])
-                            reply_message_new.extend([msg, '\n'])
+                            if 'https:' in msg:
+                                reply_message_new.append(msg)
+                            else:
+                                if count > 1:
+                                    reply_message_new.extend([str(i+1), '. '])
+                                reply_message_new.extend([msg, '\n'])
                             break
                         else:
                             r -= weight
                 if minimum and count >= int(opt.get('保底', 10)) and len(minimum_pool_get) > 0:
                      reply_message_new[-2] = choice(minimum_pool_get)
                 reply_message = ''.join(reply_message_new)
+                return reply_message if not 'https:' in reply_message else reply_message_new
                 
             if '||' in reply_message: reply_message = reply_message.split('||')
             return reply_message

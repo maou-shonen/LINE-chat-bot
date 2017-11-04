@@ -27,6 +27,8 @@ class LineBot(LineBotApi):
                 message = message.strip()
                 message_object.append(ImageSendMessage(message, message))
             elif message != '':
+                if len(message) > 2048:
+                    message = message[:2048]
                 message_object.append(TextSendMessage(message))
 
         try:

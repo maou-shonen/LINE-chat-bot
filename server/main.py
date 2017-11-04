@@ -64,7 +64,7 @@ def event_postback():
 if __name__ == '__main__':
     app.run(
         host='0.0.0.0',
-        port=cfg['flask']['port'],
+        port=os.environ.get('port', cfg['flask']['port']),
         threaded=cfg['flask']['threaded'],
         debug=cfg['flask']['debug'],
     )
