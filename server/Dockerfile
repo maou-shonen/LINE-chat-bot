@@ -17,11 +17,10 @@ ENV LC_ALL en_US.UTF-8
 RUN apt-get install -y libmysqlclient-dev
 RUN pip install -r requirements.txt
 
-# 使端口 80 可供此容器外的环境使用
-EXPOSE 5000
+EXPOSE 5000, 9999, 9998
 
 # 定义环境变量
-ENV HELLO WORLD
+ENV port 9999
 
 # 在容器启动时运行 app.py
 CMD ["python", "main.py"]
