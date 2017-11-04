@@ -31,12 +31,13 @@ def event_text_main(bot_id, group_id, user_id, message, reply_token, **argv):
             
             #公告
             if group_id is not None and UserSettings.check_news(group_id):
+                news = ''.join([cfg['公告']['ver'], ' ', cfg['公告']['內容']])
                 if reply_message is None:
-                    reply_message = cfg['公告']['內容']
+                    reply_message = news
                 elif type(reply_message) == str:
-                    reply_message = [reply_message, cfg['公告']['內容']]
+                    reply_message = [reply_message, news]
                 else:
-                    reply_message.append(cfg['公告']['內容'])
+                    reply_message.append(news)
 
             if reply_message is not None:
                 bots[bot_id].reply_message(reply_token, reply_message)

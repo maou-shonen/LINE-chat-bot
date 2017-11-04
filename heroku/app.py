@@ -69,6 +69,7 @@ def handle_image(event):
     _post('/image', **get_id(event))
 
     def get_imgur_client():
+        global imgur
         if imgur is None:
             try:
                 return ImgurClient(os.environ.get('imgur_id'), os.environ.get('imgur_secret'))
