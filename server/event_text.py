@@ -4,11 +4,17 @@ from random import choice, randint, uniform
 from datetime import datetime, timedelta
 from hashlib import md5
 
-from api import cfg
+from api import (
+    cfg,
+    ConfigFile,
+    isValueHaveKeys, is_image_and_ready, str2bool,
+)
 from database import db, UserKeyword, UserSettings, MessageLogs
-from api import isValueHaveKeys, is_image_and_ready, str2bool
 from other import google_shorten_url
 from LineBot import bots
+
+
+UserSettings_temp = ConfigFile('.UserSettings_temp.tmp')
 
 
 def event_text_main(bot_id, group_id, user_id, message, reply_token, **argv):
@@ -30,17 +36,21 @@ def event_text_main(bot_id, group_id, user_id, message, reply_token, **argv):
                 **argv)
             
             #公告
+            if reply_message is None:
+                reply_message = []
+            if type(reply_message) == str:
+                reply_message = [reply_message]
+                
             if group_id is not None and UserSettings.check_news(group_id):
-                news = ''.join([cfg['公告']['ver'], ' ', cfg['公告']['內容']])
-                if reply_message is None:
-                    reply_message = news
-                elif type(reply_message) == str:
-                    reply_message = [reply_message, news]
-                else:
-                    reply_message.append(news)
+                reply_message.append(''.join([cfg['公告']['ver'], ' ', cfg['公告']['內容']]))
 
-            if reply_message is not None:
-                bots[bot_id].reply_message(reply_token, reply_message)
+            for mid in [user_id, group_id]:
+                if mid is not None and UserSettings_temp.has_option(mid, '臨時公告'):
+                    reply_message.append(UserSettings_temp.get(mid, '臨時公告'))
+                    UserSettings_temp.remove_option(mid, '臨時公告')
+                    UserSettings_temp.save()
+
+            bots[bot_id].reply_message(reply_token, reply_message)
             db.session.commit()
             return reply_message
 
@@ -59,10 +69,33 @@ def event_help(bot_id, group_id, user_id, message, key, value, **argv):
     return cfg['指令說明']
 
 
-@event_register()
+@event_register('公告')
 def event_push(bot_id, group_id, user_id, message, key, value, **argv):
-    #這裡要砍掉重練
-    return ''
+    if user_id != cfg['admin_line']:
+        return None
+    if value is None:
+        return '參數錯誤\n[公告=對象=內容]'
+    UserSettings_temp.set(key, '臨時公告', value)
+    UserSettings_temp.save()
+    return 'ok'
+
+
+@event_register('愛醬安靜', '愛醬閉嘴', '愛醬壞壞', '愛醬睡覺')
+def event_pause(bot_id, group_id, user_id, message, key, value, **argv):
+    if group_id is None:
+        return '...'
+    h = 6 if key is None or not key.isdigit() else int(key)
+    t = time() + 60 * 60 * (72 if h > 72 else 1 if h < 1 else h)
+    UserSettings_temp.set(group_id, '暫停', str(t))
+    return '愛醬不理你們了！愛醬睡覺去\n(%s)' % (datetime.fromtimestamp(t).strftime('%Y-%m-%d %H:%M'))
+
+
+@event_register('愛醬講話', '愛醬說話', '愛醬聊天', '愛醬乖乖', '愛醬起床')
+def event_continue(bot_id, group_id, user_id, message, key, value, **argv):
+    if group_id is None:
+        return '...'
+    UserSettings_temp.remove_option(group_id, '暫停')
+    return '愛醬大復活！'
 
 
 @event_register('-l', 'list', '列表')
@@ -405,6 +438,12 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
             return None
         else:
             MessageLogs.add(group_id, user_id, nText=1, nFuck=(message.count('幹') + message.count('fuck')), nLenght=len(message)) #紀錄次數
+
+        if UserSettings_temp.has_option(group_id, '暫停'):
+            if time() > UserSettings_temp.getfloat(group_id, '暫停'):
+                return event_continue(bot_id, group_id, user_id, message, key, value, **argv)
+            else:
+                return None
 
         if group_id is not None:
             reply_message = UserKeyword.get(group_id, message)
