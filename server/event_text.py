@@ -440,7 +440,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                 
                 if len(reply_message_new) > 0:
                     if count == 1:
-                        reply_message = list(reply_message_new.keys())[0]
+                        reply_message = list(reply_message_new.keys())
                     else:
                         reply_message = []
                         for msg, num in reply_message_new.items():
