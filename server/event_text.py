@@ -1,4 +1,5 @@
 import yaml
+import requests
 from time import time
 from random import choice, randint, uniform
 from datetime import datetime, timedelta
@@ -87,6 +88,7 @@ def event_pause(bot_id, group_id, user_id, message, key, value, **argv):
     h = 6 if key is None or not key.isdigit() else int(key)
     t = time() + 60 * 60 * (72 if h > 72 else 1 if h < 1 else h)
     UserSettings_temp.set(group_id, '暫停', str(t))
+    UserSettings_temp.save()
     return '愛醬不理你們了！愛醬睡覺去\n(%s)' % (datetime.fromtimestamp(t).strftime('%Y-%m-%d %H:%M'))
 
 
@@ -95,6 +97,7 @@ def event_continue(bot_id, group_id, user_id, message, key, value, **argv):
     if group_id is None:
         return '...'
     UserSettings_temp.remove_option(group_id, '暫停')
+    UserSettings_temp.save()
     return '愛醬大復活！'
 
 
@@ -140,6 +143,7 @@ def event_add(bot_id, group_id, user_id, message, key, value, **argv):
         i = i.strip()
         if i[:4] == 'http' and not is_image_and_ready(i):
             return '<%s>\n愛醬發現圖片網址是錯誤的\n請使用格式(jpg, png)\n短網址或網頁嵌圖片可能無效\n必須使用https' % i
+        break #如果全部都檢查時間會太久 只幫第一個檢查格式 通常使用者圖床也會使用同一個 應該不會有問題
 
     reply_message = ['<%s>記住了喔 ' % key]
 
@@ -370,67 +374,90 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
 
             #隨機 (算法:比重)
             if '__' in reply_message:
-                msg_arr = []
-                msg_weight = 0
-
-                minimum = True
+                weight_total = 0
+                result_pool = {}
                 minimum_pool = []
-                minimum_pool_get = []
                 for msg in reply_message.split('__'):
-                    #分析保底池
-                    def minimum_pool_add(msg):
-                        if msg[:2] == '**':
-                            msg = msg[2:]
-                            minimum_pool.append(msg)
-                            minimum_pool_get.append(msg)
-                        elif msg[:1] == '*':
-                            msg = msg[1:]
-                            minimum_pool.append(msg)
-                        return msg
+                    if msg == '':
+                        continue
 
-                    #分析比重
                     index = msg.rfind('%')
                     if index > -1 and msg[index+1:].strip().isdigit():
                         weight = int(msg[index+1:].strip())
-                        msg_arr.append([minimum_pool_add(msg[:index]), weight])
+                        msg = msg[:index]
                     else:
                         weight = 1
-                        msg_arr.append([minimum_pool_add(msg), weight])
-                    msg_weight += weight
+                    weight_total += weight
+
+                    is_minimum = msg[:1] == '*'
+                    if is_minimum:
+                        is_minimum_pool = msg[:2] == '**'
+                        msg = msg[2:] if is_minimum_pool else msg[1:]
+
+                    result_pool[msg] = {
+                        'weight':weight,
+                        'is_minimum':is_minimum,
+                    }
+                    if is_minimum and is_minimum_pool:
+                        minimum_pool.append(msg)
 
                 if '種子' in opt and opt['種子'].isdigit() and int(opt['種子']) > 0:
-                    seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
-                    seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % msg_weight
                     count = 1
+                    seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
+                    seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
                 else:
-                    seed = 0
                     count = int(message[message.rfind('*')+1:]) if '*' in message and message[message.rfind('*')+1:].isdigit() else 1
-                    if count > 100: count = 100
+                    if count > 10000: count = 10000
                     if count <  1: count = 1
+                    try:
+                        #random.org的隨機比較接近真隨機
+                        seed = requests.get('https://www.random.org/integers/?num=%s&min=0&max=%s&col=1&base=10&format=plain&rnd=new' % (count, weight_total), timeout=3).text.split('\n')[:-1]
+                    except:
+                        seed = [uniform(0, weight_total) for i in range(count)]
 
-                reply_message_new = []
+                minimum_count = 0
+                minimum_index = int(opt.get('保底', 10))
+                reply_message_new = {}
+                reply_message_image = []
                 for i in range(count):
-                    r = uniform(0, msg_weight) if seed == 0 else seed
-                    for msg, weight in msg_arr:
-                        if r <= weight:
-                            if msg in minimum_pool:
-                                minimum = False #抽中保底池 保底取消
-                            if 'https:' in msg:
-                                reply_message_new.append(msg)
-                            else:
-                                if count > 1:
-                                    reply_message_new.extend([str(i+1), '. '])
-                                reply_message_new.extend([msg, '\n'])
-                            break
+                    #r = uniform(0, weight_total) if seed == -1 else seed
+                    r = int(seed[i]) if type(seed) == list else seed
+                    for msg, msg_opt in result_pool.items():
+                        if r > msg_opt['weight']:
+                            r -= msg_opt['weight']
                         else:
-                            r -= weight
-                if minimum and count >= int(opt.get('保底', 10)) and len(minimum_pool_get) > 0:
-                     reply_message_new[-2] = choice(minimum_pool_get)
-                reply_message = ''.join(reply_message_new)
-                return reply_message if not 'https:' in reply_message else reply_message_new
+                            minimum_count = 0 if msg_opt['is_minimum'] else minimum_count + 1
+                            if minimum_count >= minimum_index and len(minimum_pool) > 0:
+                                minimum_count = 0
+                                msg = choice(minimum_pool)
+                            if msg[:6] == 'https:':
+                                reply_message_image.append(msg)
+                                if len(reply_message_image) > 5:
+                                    break
+                            else:
+                                reply_message_new[msg] = (reply_message_new[msg] + 1) if msg in reply_message_new else 1
+                            break
                 
-            if '||' in reply_message: reply_message = reply_message.split('||')
-            return reply_message
+                if len(reply_message_new) > 0:
+                    if count == 1:
+                        reply_message = list(reply_message_new.keys())[0]
+                    else:
+                        reply_message = []
+                        for msg, num in reply_message_new.items():
+                            reply_message.append('%s x %s' % (msg, num))
+                        reply_message = ['\n'.join(reply_message)]
+                else:
+                    reply_message = []
+                reply_message.extend(reply_message_image)
+                
+            #這邊有待優化
+            if type(reply_message) == str:
+                reply_message = [reply_message]
+            reply_message_new = []
+            for msg in reply_message:
+                for msg_split in msg.split('||'):
+                    reply_message_new.append(msg_split)
+            return reply_message_new
             
         message = message.lower()
         if 'http:' in message or 'https:' in message: #如果內容含有網址 不觸發 順便紀錄
@@ -441,7 +468,9 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
 
         if UserSettings_temp.has_option(group_id, '暫停'):
             if time() > UserSettings_temp.getfloat(group_id, '暫停'):
-                return event_continue(bot_id, group_id, user_id, message, key, value, **argv)
+                UserSettings_temp.remove_option(group_id, '暫停')
+                UserSettings_temp.save()
+                return '愛醬大復活！'
             else:
                 return None
 

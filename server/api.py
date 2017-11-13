@@ -1,7 +1,9 @@
 import yaml
 import requests
 
+
 cfg = yaml.load(open('config.yaml', 'r', encoding='utf-8-sig'))
+
 
 from configparser import ConfigParser
 class ConfigFile(ConfigParser):

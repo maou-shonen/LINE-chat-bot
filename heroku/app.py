@@ -23,7 +23,9 @@ imgur = None
 
 def _post(endpoint, **json):
     try:
-        return requests.post(server_url + endpoint, json=json, timeout=30)
+        r = requests.post(server_url + endpoint, json=json, timeout=30)
+        print('[%s] [%s]' % (r.status_code, json['message'])) #用來檢測heroku沒有將內容傳送過來的問題 ...吃字
+        return r
     except:
         pass
 
@@ -87,14 +89,14 @@ def handle_image(event):
         if imgur is None:
             msg = '圖床目前無法訪問 愛醬攤手'
         else:
-            for i in range(5):
+            for i in range(100):
                 try:
                     image = imgur.upload_from_path(path)
-                    msg = '愛醬幫你上傳圖片了喔\nID=%s (之後用來刪除)\n%s' % (image['id'], image['link'])
+                    msg = '愛醬幫你上傳圖片了喔\n%s' % (image['link'])
                     break
                 except Exception as e:
                     msg = '愛醬上傳圖片錯誤了...\n%s' % str(e)
-                    time.sleep(2)
+                    time.sleep(0.2)
         os.remove(path)
         bot.reply_message(event.reply_token, TextSendMessage(text=msg))
 
