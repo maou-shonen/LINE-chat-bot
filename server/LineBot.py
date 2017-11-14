@@ -22,7 +22,7 @@ class LineBot(LineBotApi):
             messages = [messages]
         
         message_object = []
-        for message in messages[:4]:
+        for message in messages[:5]:
             if message[:4] == 'http':
                 message = message.strip()
                 message_object.append(ImageSendMessage(message, message))

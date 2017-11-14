@@ -129,12 +129,20 @@ class UserSettings(db.Model):
 
     @staticmethod
     def __get(id):
+        data = UserSettings.query.get(id)
+        if data is None:
+            data = UserSettings(id)
+            db.session.add(data)
+        return data
+
+        '''
         for row in UserSettings.query.filter_by(id=id):
             return row
         else:
             data = UserSettings(id)
             db.session.add(data)
             return data
+        '''
     
     @staticmethod
     def refresh_last_time(id):

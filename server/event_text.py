@@ -8,7 +8,7 @@ from hashlib import md5
 from api import (
     cfg,
     ConfigFile,
-    isValueHaveKeys, is_image_and_ready, str2bool,
+    isValueHaveKeys, is_image_and_ready, str2bool, isFloat,
 )
 from database import db, UserKeyword, UserSettings, MessageLogs
 from other import google_shorten_url
@@ -382,8 +382,9 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                         continue
 
                     index = msg.rfind('%')
-                    if index > -1 and msg[index+1:].strip().isdigit():
-                        weight = int(msg[index+1:].strip())
+                    if index > -1 and isFloat(msg[index+1:].strip()):
+                    #if index > -1 and msg[index+1:].strip().isdigit():
+                        weight = float(msg[index+1:].strip())
                         msg = msg[:index]
                     else:
                         weight = 1
@@ -401,19 +402,21 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                     if is_minimum and is_minimum_pool:
                         minimum_pool.append(msg)
 
-                if '種子' in opt and opt['種子'].isdigit() and int(opt['種子']) > 0:
-                    count = 1
-                    seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
-                    seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
+                count = int(message[message.rfind('*')+1:]) if '*' in message and message[message.rfind('*')+1:].isdigit() else 1
+                if count > 10000: count = 10000
+                if count <  1: count = 1
+                if count > 1:
+                    if '種子' in opt and opt['種子'].isdigit() and int(opt['種子']) > 0:
+                        seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
+                        seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
+                    else:
+                        try:
+                             #random.org的隨機比較接近真隨機
+                            seed = requests.get('https://www.random.org/integers/?num=%s&min=0&max=%s&col=1&base=10&format=plain&rnd=new' % (count, weight_total), timeout=3).text.split('\n')[:-1]
+                        except:
+                            seed = [uniform(0, weight_total) for i in range(count)]
                 else:
-                    count = int(message[message.rfind('*')+1:]) if '*' in message and message[message.rfind('*')+1:].isdigit() else 1
-                    if count > 10000: count = 10000
-                    if count <  1: count = 1
-                    try:
-                        #random.org的隨機比較接近真隨機
-                        seed = requests.get('https://www.random.org/integers/?num=%s&min=0&max=%s&col=1&base=10&format=plain&rnd=new' % (count, weight_total), timeout=3).text.split('\n')[:-1]
-                    except:
-                        seed = [uniform(0, weight_total) for i in range(count)]
+                    seed = [uniform(0, weight_total) for i in range(count)]
 
                 minimum_count = 0
                 minimum_index = int(opt.get('保底', 10))
@@ -421,7 +424,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                 reply_message_image = []
                 for i in range(count):
                     #r = uniform(0, weight_total) if seed == -1 else seed
-                    r = int(seed[i]) if type(seed) == list else seed
+                    r = float(seed[i]) if type(seed) == list else seed
                     for msg, msg_opt in result_pool.items():
                         if r > msg_opt['weight']:
                             r -= msg_opt['weight']
@@ -448,7 +451,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                         reply_message = ['\n'.join(reply_message)]
                 else:
                     reply_message = []
-                reply_message.extend(reply_message_image)
+                reply_message.extend(reply_message_image[:5])
                 
             #這邊有待優化
             if type(reply_message) == str:

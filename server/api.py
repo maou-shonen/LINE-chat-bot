@@ -5,6 +5,11 @@ import requests
 cfg = yaml.load(open('config.yaml', 'r', encoding='utf-8-sig'))
 
 
+class Cache(dict):
+    def have(self, key):
+        return key in self
+
+
 from configparser import ConfigParser
 class ConfigFile(ConfigParser):
     def __init__(self, path=None):
@@ -36,6 +41,13 @@ def str2bool(s):
     if s in cfg['詞組']['否']:
         return False
     raise Exception('str2bool 無法識別 <%s>' % s)
+
+def isFloat(s):
+    try:
+        float(s)
+        return True
+    except:
+        return False
     
 
 def is_image_and_ready(url):
