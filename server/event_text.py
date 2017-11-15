@@ -405,7 +405,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                 count = int(message[message.rfind('*')+1:]) if '*' in message and message[message.rfind('*')+1:].isdigit() else 1
                 if count > 10000: count = 10000
                 if count <  1: count = 1
-                if count > 1:
+                if count == 1:
                     if '種子' in opt and opt['種子'].isdigit() and int(opt['種子']) > 0:
                         seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
                         seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
