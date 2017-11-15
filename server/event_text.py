@@ -153,7 +153,7 @@ def event_add(bot_id, group_id, user_id, message, key, value, **argv):
     if user_id is not None and UserKeyword.add_and_update(user_id, user_id, key, value):
         reply_message.append('(個人)')
     else:
-        reply_message.append('(不儲存個人)\nhttps://goo.gl/bN3JnT')
+        reply_message.append('(不儲存個人)\nhttps://goo.gl/zTwaL2')
         
     return ''.join(reply_message)
 
