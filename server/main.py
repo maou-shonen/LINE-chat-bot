@@ -3,7 +3,7 @@ from time import time
 
 from api import cfg
 from app import app, request, abort
-from database import MessageLogs
+from database import db, MessageLogs
 from LineBot import bots
 from event_text import event_text_main
 
@@ -25,12 +25,14 @@ def event_text():
 @app.route("/sticker", methods=['POST'])
 def event_sticker():
     MessageLogs.add(request.json['group_id'], request.json['user_id'], nSticker=1)
+    db.session.commit()
     return ''
 
 
 @app.route("/image", methods=['POST'])
 def event_image():
     MessageLogs.add(request.json['group_id'], request.json['user_id'], nImage=1)
+    db.session.commit()
     return ''
 
 

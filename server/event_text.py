@@ -96,9 +96,12 @@ def event_pause(bot_id, group_id, user_id, message, key, value, **argv):
 def event_continue(bot_id, group_id, user_id, message, key, value, **argv):
     if group_id is None:
         return '...'
-    UserSettings_temp.remove_option(group_id, '暫停')
-    UserSettings_temp.save()
-    return '愛醬大復活！'
+    if UserSettings_temp.has_option(group_id, '暫停'):
+        UserSettings_temp.remove_option(group_id, '暫停')
+        UserSettings_temp.save()
+        return '愛醬大復活！'
+    else:
+        return None
 
 
 @event_register('-l', 'list', '列表')
@@ -113,7 +116,9 @@ def event_list(bot_id, group_id, user_id, message, key, value, **argv):
 @event_register('-a', 'add', 'keyword', '新增', '關鍵字', '學習')
 def event_add(bot_id, group_id, user_id, message, key, value, **argv):
     MessageLogs.add(group_id, user_id, nAIset=1) #紀錄次數
-    if isValueHaveKeys(message, cfg['詞組']['髒話']):
+    print(UserSettings.get(group_id, 'filter_fuck', True))
+    filter_fuck = (group_id is None or UserSettings.get(group_id, 'filter_fuck', True))
+    if filter_fuck and isValueHaveKeys(message, cfg['詞組']['髒話']):
         return '愛醬覺得說髒話是不對的!!'
 
     if key is None:
@@ -196,10 +201,14 @@ def event_set(bot_id, group_id, user_id, message, key, value, **argv):
         if key == '全群組關鍵字':
             UserSettings.update(group_id, all_group_keyword=str2bool(value))
             return '設定完成'
+        elif key == '髒話過濾':
+            UserSettings.update(group_id, filter_fuck=str2bool(value))
         else:
             return (
-                '目前可使用:'
-                '設定=全群組關鍵字=開啟/關閉\n(可以使用別的群組的關鍵字)')
+                '目前可使用:\n'
+                '設定=髒話過濾=開/關\n'
+                '設定=全群組關鍵字=開/閉\n(可以使用別的群組的關鍵字)\n'
+            )
 
 
 
@@ -355,171 +364,172 @@ def event_rss_nyaa2(bot_id, group_id, user_id, message, key, value, **argv):
 
 @event_register('')
 def event_main(bot_id, group_id, user_id, message, key, value, **argv):
-    if group_id is not None:
-        #後處理
-        def later(reply_message):
-            MessageLogs.add(group_id, user_id, nAItrigger=1) #紀錄次數
+    #後處理
+    def later(reply_message):
+        MessageLogs.add(group_id, user_id, nAItrigger=1) #紀錄次數
 
-            #取參數
-            opt = {}
-            if '##' in reply_message:
-                reply_message_new = []
-                for i in reply_message.split('##'):
-                    if '=' in i:
-                        a, *b = i.split('=')
-                        opt[a] = '='.join(b)
-                    else:
-                        reply_message_new.append(i)
-                reply_message = ''.join(reply_message_new)
-
-            #隨機 (算法:比重)
-            if '__' in reply_message:
-                weight_total = 0
-                result_pool = {}
-                minimum_pool = []
-                for msg in reply_message.split('__'):
-                    if msg == '':
-                        continue
-
-                    index = msg.rfind('%')
-                    if index > -1 and isFloat(msg[index+1:].strip()):
-                    #if index > -1 and msg[index+1:].strip().isdigit():
-                        weight = float(msg[index+1:].strip())
-                        msg = msg[:index]
-                    else:
-                        weight = 1
-                    weight_total += weight
-
-                    is_minimum = msg[:1] == '*'
-                    if is_minimum:
-                        is_minimum_pool = msg[:2] == '**'
-                        msg = msg[2:] if is_minimum_pool else msg[1:]
-
-                    result_pool[msg] = {
-                        'weight':weight,
-                        'is_minimum':is_minimum,
-                    }
-                    if is_minimum and is_minimum_pool:
-                        minimum_pool.append(msg)
-
-                count = int(message[message.rfind('*')+1:]) if '*' in message and message[message.rfind('*')+1:].isdigit() else 1
-                if count > 10000: count = 10000
-                if count <  1: count = 1
-                if count == 1:
-                    if '種子' in opt and opt['種子'].isdigit() and int(opt['種子']) > 0:
-                        seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
-                        seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
-                    else:
-                        try:
-                             #random.org的隨機比較接近真隨機
-                            seed = requests.get('https://www.random.org/integers/?num=%s&min=0&max=%s&col=1&base=10&format=plain&rnd=new' % (count, weight_total), timeout=3).text.split('\n')[:-1]
-                        except:
-                            seed = [uniform(0, weight_total) for i in range(count)]
+        #取參數
+        opt = {}
+        if '##' in reply_message:
+            reply_message_new = []
+            for i in reply_message.split('##'):
+                if '=' in i:
+                    a, *b = i.split('=')
+                    opt[a] = '='.join(b)
                 else:
-                    seed = [uniform(0, weight_total) for i in range(count)]
+                    reply_message_new.append(i)
+            reply_message = ''.join(reply_message_new)
 
-                minimum_count = 0
-                minimum_index = int(opt.get('保底', 10))
-                reply_message_new = {}
-                reply_message_image = []
-                for i in range(count):
-                    #r = uniform(0, weight_total) if seed == -1 else seed
-                    r = float(seed[i]) if type(seed) == list else seed
-                    for msg, msg_opt in result_pool.items():
-                        if r > msg_opt['weight']:
-                            r -= msg_opt['weight']
-                        else:
-                            minimum_count = 0 if msg_opt['is_minimum'] else minimum_count + 1
-                            if minimum_count >= minimum_index and len(minimum_pool) > 0:
-                                minimum_count = 0
-                                msg = choice(minimum_pool)
-                            if msg[:6] == 'https:':
-                                reply_message_image.append(msg)
-                                if len(reply_message_image) > 5:
-                                    break
-                            else:
-                                reply_message_new[msg] = (reply_message_new[msg] + 1) if msg in reply_message_new else 1
-                            break
-                
-                if len(reply_message_new) > 0:
-                    if count == 1:
-                        reply_message = list(reply_message_new.keys())
+        #隨機 (算法:比重)
+        if '__' in reply_message:
+            weight_total = 0
+            result_pool = {}
+            minimum_pool = []
+            for msg in reply_message.split('__'):
+                if msg == '':
+                    continue
+
+                index = msg.rfind('%')
+                if index > -1 and isFloat(msg[index+1:].strip()):
+                #if index > -1 and msg[index+1:].strip().isdigit():
+                    weight = float(msg[index+1:].strip())
+                    msg = msg[:index]
+                else:
+                    weight = 1
+                weight_total += weight
+
+                is_minimum = msg[:1] == '*'
+                if is_minimum:
+                    is_minimum_pool = msg[:2] == '**'
+                    msg = msg[2:] if is_minimum_pool else msg[1:]
+
+                result_pool[msg] = {
+                    'weight':weight,
+                    'is_minimum':is_minimum,
+                }
+                if is_minimum and is_minimum_pool:
+                    minimum_pool.append(msg)
+
+            count = int(message[message.rfind('*')+1:]) if '*' in message and message[message.rfind('*')+1:].isdigit() else 1
+            if count > 10000: count = 10000
+            if count <  1: count = 1
+            if count == 1 and '種子' in opt and opt['種子'].isdigit() and int(opt['種子']) > 0:
+                seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
+                seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
+            else:
+                try:
+                    #random.org的隨機據說為真隨機
+                    if count > 1:
+                        seed = requests.get('https://www.random.org/integers/?num=%s&min=0&max=%s&col=1&base=10&format=plain&rnd=new' % (count, int(weight_total)), timeout=3).text.split('\n')[:-1]
                     else:
-                        reply_message = []
-                        for msg, num in reply_message_new.items():
-                            reply_message.append('%s x %s' % (msg, num))
-                        reply_message = ['\n'.join(reply_message)]
+                        raise
+                except:
+                    seed = [uniform(0, int(weight_total)) for i in range(count)]
+
+            minimum_count = 0
+            minimum_index = int(opt.get('保底', 10))
+            reply_message_new = {}
+            reply_message_image = []
+            for i in range(count):
+                #r = uniform(0, weight_total) if seed == -1 else seed
+                r = float(seed[i]) if type(seed) == list else seed
+                for msg, msg_opt in result_pool.items():
+                    if r > msg_opt['weight']:
+                        r -= msg_opt['weight']
+                    else:
+                        minimum_count = 0 if msg_opt['is_minimum'] else minimum_count + 1
+                        if minimum_count >= minimum_index and len(minimum_pool) > 0:
+                            minimum_count = 0
+                            msg = choice(minimum_pool)
+                        if msg[:6] == 'https:':
+                            reply_message_image.append(msg)
+                            if len(reply_message_image) > 5:
+                                break
+                        else:
+                            reply_message_new[msg] = (reply_message_new[msg] + 1) if msg in reply_message_new else 1
+                        break
+                
+            if len(reply_message_new) > 0:
+                if count == 1:
+                    reply_message = list(reply_message_new.keys())
                 else:
                     reply_message = []
-                reply_message.extend(reply_message_image[:5])
+                    for msg, num in reply_message_new.items():
+                        reply_message.append('%s x %s' % (msg, num))
+                    reply_message = ['\n'.join(reply_message)]
+            else:
+                reply_message = []
+            reply_message.extend(reply_message_image[:5])
                 
-            #這邊有待優化
-            if type(reply_message) == str:
-                reply_message = [reply_message]
-            reply_message_new = []
-            for msg in reply_message:
-                for msg_split in msg.split('||'):
-                    reply_message_new.append(msg_split)
-            return reply_message_new
+        #這邊有待優化
+        if type(reply_message) == str:
+            reply_message = [reply_message]
+        reply_message_new = []
+        for msg in reply_message:
+            for msg_split in msg.split('||'):
+                reply_message_new.append(msg_split)
+        return reply_message_new
             
-        message = message.lower()
-        if 'http:' in message or 'https:' in message: #如果內容含有網址 不觸發 順便紀錄
-            MessageLogs.add(group_id, user_id, nUrl=1) #紀錄次數
-            return None
-        else:
-            MessageLogs.add(group_id, user_id, nText=1, nFuck=(message.count('幹') + message.count('fuck')), nLenght=len(message)) #紀錄次數
-
-        if UserSettings_temp.has_option(group_id, '暫停'):
-            if time() > UserSettings_temp.getfloat(group_id, '暫停'):
-                UserSettings_temp.remove_option(group_id, '暫停')
-                UserSettings_temp.save()
-                return '愛醬大復活！'
-            else:
-                return None
-
-        if group_id is not None:
-            reply_message = UserKeyword.get(group_id, message)
-            if reply_message is not None:
-                return later(reply_message.reply)
-        
-        if user_id is not None:
-            reply_message = UserKeyword.get(user_id, message)
-            if reply_message is not None:
-                return later(reply_message.reply)
-
-        keys = []
-        if group_id is not None:
-            for i in UserKeyword.get(group_id):
-                keys.append((i.keyword, i.reply))
-        if user_id is not None:
-            for i in UserKeyword.get(user_id):
-                keys.append((i.keyword, i.reply))
-
-        for k, v in keys:
-            kn = -1
-            k_arr = k.split('**')
-            for k2 in k_arr:
-                if k2 != '':
-                    n = message.find(k2)
-                    if n > kn:
-                        kn = n
-                    else:
-                        break
-                #最後檢查前後如果為任意字元的情況 那相對的最前最後一個字元必須相等 雖然使用字串會比較精準 暫時先用一個字元 如果**混在中間有可能誤判 但是問題不大
-                if k_arr[0] != '' and message[0] != k[0]: break
-                if k_arr[-1] != '' and message[-1] != k[-1]: break
-            else:
-                return later(v)
-
-        #使用全群組的關鍵字 限無**
-        if UserSettings.get(group_id, 'all_group_keyword', False):
-            for k in UserKeyword.query.filter_by(super=0, keyword=message).order_by(UserKeyword._id.desc()):
-                return later(k.reply)
-
+    message = message.lower()
+    if 'http:' in message or 'https:' in message: #如果內容含有網址 不觸發 順便紀錄
+        MessageLogs.add(group_id, user_id, nUrl=1) #紀錄次數
+        return None
     else:
+        MessageLogs.add(group_id, user_id, nText=1, nFuck=(message.count('幹') + message.count('fuck')), nLenght=len(message)) #紀錄次數
+
+    if UserSettings_temp.has_option(group_id, '暫停'):
+        if time() > UserSettings_temp.getfloat(group_id, '暫停'):
+            UserSettings_temp.remove_option(group_id, '暫停')
+            UserSettings_temp.save()
+            return '愛醬大復活！'
+        else:
+            return None
+
+    if group_id is not None:
+        reply_message = UserKeyword.get(group_id, message)
+        if reply_message is not None:
+            return later(reply_message.reply)
+        
+    if user_id is not None:
+        reply_message = UserKeyword.get(user_id, message)
+        if reply_message is not None:
+            return later(reply_message.reply)
+
+    keys = []
+    if group_id is not None:
+        for i in UserKeyword.get(group_id):
+            keys.append((i.keyword, i.reply))
+    if user_id is not None:
+        for i in UserKeyword.get(user_id):
+            keys.append((i.keyword, i.reply))
+
+    for k, v in keys:
+        kn = -1
+        k_arr = k.split('**')
+        for k2 in k_arr:
+            if k2 != '':
+                n = message.find(k2)
+                if n > kn:
+                    kn = n
+                else:
+                    break
+            #最後檢查前後如果為任意字元的情況 那相對的最前最後一個字元必須相等 雖然使用字串會比較精準 暫時先用一個字元 如果**混在中間有可能誤判 但是問題不大
+            if k_arr[0] != '' and message[0] != k[0]: break
+            if k_arr[-1] != '' and message[-1] != k[-1]: break
+        else:
+            return later(v)
+
+    #使用全群組的關鍵字 限無**
+    if group_id is not None and UserSettings.get(group_id, 'all_group_keyword', False):
+        for k in UserKeyword.query.filter_by(super=0, keyword=message).order_by(UserKeyword._id.desc()):
+            return later(k.reply)
+
+    if group_id is None:
         message = message.strip()
         if message[:4] == 'http':
             return '愛醬幫你申請短網址了喵\n%s' % google_shorten_url(message)
         else:
             return '群組指令說明輸入-?\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n其他功能如果有建議請使用回報'
+    else:
+        return None
 

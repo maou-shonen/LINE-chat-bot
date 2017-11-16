@@ -59,7 +59,6 @@ class UserKeyword(db.Model):
                 return None
 
 
-
 class MessageLogs(db.Model):
     _id        = db.Column(db.Integer, autoincrement=True, primary_key=True)
     group_id   = db.Column(db.String(35))
@@ -87,18 +86,18 @@ class MessageLogs(db.Model):
 
     @staticmethod
     def add(group_id, user_id, nAIset=0, nAItrigger=0, nText=0, nSticker=0, nImage=0, nUrl=0, nFuck=0, nLenght=0):
-        for row in MessageLogs.query.filter_by(group_id=group_id, user_id=user_id):
-            row.nAIset += nAIset
-            row.nAItrigger += nAItrigger
-            row.nText += nText
-            row.nSticker += nSticker
-            row.nImage += nImage
-            row.nUrl += nUrl
-            row.nFuck += nFuck
-            row.nLenght += nLenght
-            break
-        else:
+        data =  MessageLogs.query.filter_by(group_id=group_id, user_id=user_id).first()
+        if data is None:
             db.session.add(MessageLogs(group_id, user_id, nAIset, nAItrigger, nText, nSticker, nImage, nUrl, nFuck, nLenght))
+        else:
+            data.nAIset += nAIset
+            data.nAItrigger += nAItrigger
+            data.nText += nText
+            data.nSticker += nSticker
+            data.nImage += nImage
+            data.nUrl += nUrl
+            data.nFuck += nFuck
+            data.nLenght += nLenght
 
     @staticmethod
     def get(group_id):
@@ -109,6 +108,7 @@ class MessageLogs(db.Model):
             data['nAItrigger'] += row.nAItrigger
             data['nText'] += row.nText
             data['nSticker'] += row.nSticker
+            data['nSticker'] += row.nImage
             data['nUrl'] += row.nUrl
             data['nFuck'] += row.nFuck
             data['nLenght'] += row.nLenght

@@ -23,7 +23,7 @@ class LineBot(LineBotApi):
         
         message_object = []
         for message in messages[:5]:
-            if message[:4] == 'http':
+            if message[:6] == 'https:':
                 message = message.strip()
                 message_object.append(ImageSendMessage(message, message))
             elif message != '':
