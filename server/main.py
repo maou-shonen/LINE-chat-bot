@@ -1,4 +1,5 @@
 import os
+import sys
 from time import time
 
 from api import cfg
@@ -11,11 +12,26 @@ from event_text import event_text_main
 @app.route("/text", methods=['POST'])
 def event_text():
     start_time = time()
-    reply_message = event_text_main(**request.json)
-
+    
     user_id = request.json['user_id'][:6] if request.json['user_id'] is not None else str(None)
     if request.json['group_id'] is not None: user_id += '@%s' % request.json['group_id'][:4]
     print(user_id, '>', request.json['message'])
+
+    try:
+        reply_message = event_text_main(**request.json)
+    except Exception as e:
+        bots[request.json['bot_id']].reply_message(request.json['reply_token'], '愛醬出錯了！')
+
+        e_type, e_value, e_traceback = sys.exc_info()
+        bots['admin'].send_message(cfg['admin_line'], '<愛醬BUG>\ntype:%s\nvalue:%s\nfile:%s\nfunc:%s\nline:%s' % (
+            str(e_type),
+            str(e_value),
+            str(e_traceback.tb_frame.f_code.co_filename),
+            str(e_traceback.tb_frame.f_code.co_name),
+            str(e_traceback.tb_lineno),
+        ))
+        abort(400)
+    
     if len(reply_message) == 0:
         abort(400)
     print(user_id, '<', reply_message, '(耗時%.3fs)' % (time()-start_time))

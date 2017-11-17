@@ -101,7 +101,7 @@ def event_continue(bot_id, group_id, user_id, message, key, value, **argv):
         UserSettings_temp.save()
         return '愛醬大復活！'
     else:
-        return None
+        return '愛醬沒睡'
 
 
 @event_register('-l', 'list', '列表')
@@ -116,7 +116,6 @@ def event_list(bot_id, group_id, user_id, message, key, value, **argv):
 @event_register('-a', 'add', 'keyword', '新增', '關鍵字', '學習')
 def event_add(bot_id, group_id, user_id, message, key, value, **argv):
     MessageLogs.add(group_id, user_id, nAIset=1) #紀錄次數
-    print(UserSettings.get(group_id, 'filter_fuck', True))
     filter_fuck = (group_id is None or UserSettings.get(group_id, 'filter_fuck', True))
     if filter_fuck and isValueHaveKeys(message, cfg['詞組']['髒話']):
         return '愛醬覺得說髒話是不對的!!'
@@ -125,7 +124,7 @@ def event_add(bot_id, group_id, user_id, message, key, value, **argv):
         return cfg['學習說明']
 
     key = key.lower()
-    if value is None:
+    if value is None or value == '':
         reply_message = ['<%s>' % key]
 
         if group_id is not None:
@@ -420,7 +419,10 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                 try:
                     #random.org的隨機據說為真隨機
                     if count > 1:
-                        seed = requests.get('https://www.random.org/integers/?num=%s&min=0&max=%s&col=1&base=10&format=plain&rnd=new' % (count, int(weight_total)), timeout=3).text.split('\n')[:-1]
+                        r = requests.get('https://www.random.org/integers/?num=%s&min=0&max=%s&col=1&base=10&format=plain&rnd=new' % (count, int(weight_total)), timeout=3)
+                        if 'Error' in r.text:
+                            raise
+                        seed = r.text.split('\n')[:-1]
                     else:
                         raise
                 except:
@@ -529,7 +531,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
         if message[:4] == 'http':
             return '愛醬幫你申請短網址了喵\n%s' % google_shorten_url(message)
         else:
-            return '群組指令說明輸入-?\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n其他功能如果有建議請使用回報'
+            return '群組指令說明輸入【指令】\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n其他功能如果有建議請使用回報'
     else:
         return None
 
