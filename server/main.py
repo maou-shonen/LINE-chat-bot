@@ -14,13 +14,13 @@ def event_text():
     start_time = time()
     
     user_id = request.json['user_id'][:6] if request.json['user_id'] is not None else str(None)
-    if request.json['group_id'] is not None: user_id += '@%s' % request.json['group_id'][:4]
+    if request.json['group_id'] is not None: user_id += '@%s' % request.json['group_id']
     print(user_id, '>', request.json['message'])
 
     try:
         reply_message = event_text_main(**request.json)
     except Exception as e:
-        bots[request.json['bot_id']].reply_message(request.json['reply_token'], '愛醬出錯了！')
+        bots[request.json['bot_id']].reply_message(request.json['reply_token'], '愛醬出錯了！\n如果有需要 作者會察看此錯誤報告')
 
         e_type, e_value, e_traceback = sys.exc_info()
         bots['admin'].send_message(cfg['admin_line'], '<愛醬BUG>\ntype:%s\nvalue:%s\nfile:%s\nfunc:%s\nline:%s' % (
@@ -30,6 +30,7 @@ def event_text():
             str(e_traceback.tb_frame.f_code.co_name),
             str(e_traceback.tb_lineno),
         ))
+        raise e
         abort(400)
     
     if len(reply_message) == 0:

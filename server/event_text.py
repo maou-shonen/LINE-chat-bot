@@ -11,7 +11,7 @@ from api import (
     isValueHaveKeys, is_image_and_ready, str2bool, isFloat,
 )
 from database import db, UserKeyword, UserSettings, MessageLogs
-from other import google_shorten_url
+from other import google_shorten_url, google_search, ehentai_search, exhentai_search
 from LineBot import bots
 
 
@@ -47,7 +47,11 @@ def event_text_main(bot_id, group_id, user_id, message, reply_token, **argv):
 
             for mid in [user_id, group_id]:
                 if mid is not None and UserSettings_temp.has_option(mid, '臨時公告'):
-                    reply_message.append(UserSettings_temp.get(mid, '臨時公告'))
+                    try:
+                        user_name = bots[bot_id].get_group_member_profile(group_id, user_id).display_name
+                    except:
+                        user_name = ''
+                    reply_message.append('<作者回覆%s>\n%s' % (user_name, UserSettings_temp.get(mid, '臨時公告')))
                     UserSettings_temp.remove_option(mid, '臨時公告')
                     UserSettings_temp.save()
 
@@ -85,41 +89,41 @@ def event_push(bot_id, group_id, user_id, message, key, value, **argv):
 def event_pause(bot_id, group_id, user_id, message, key, value, **argv):
     if group_id is None:
         return '...'
-    h = 6 if key is None or not key.isdigit() else int(key)
-    t = time() + 60 * 60 * (72 if h > 72 else 1 if h < 1 else h)
+    h = 12 if key is None or not key.isdigit() else int(key)
+    t = time() + 60 * 60 * (24*7 if h > 24*7 else 1 if h < 1 else h)
     UserSettings_temp.set(group_id, '暫停', str(t))
     UserSettings_temp.save()
     return '愛醬不理你們了！愛醬睡覺去\n(%s)' % (datetime.fromtimestamp(t).strftime('%Y-%m-%d %H:%M'))
 
 
-@event_register('愛醬講話', '愛醬說話', '愛醬聊天', '愛醬乖乖', '愛醬起床')
+@event_register('愛醬講話', '愛醬說話', '愛醬聊天', '愛醬乖乖', '愛醬起床', '愛醬起來')
 def event_continue(bot_id, group_id, user_id, message, key, value, **argv):
     if group_id is None:
         return '...'
     if UserSettings_temp.has_option(group_id, '暫停'):
         UserSettings_temp.remove_option(group_id, '暫停')
         UserSettings_temp.save()
-        return '愛醬大復活！'
+        return 'ヽ(*´∀`)ﾉ 愛醬大復活！！'
     else:
-        return '愛醬沒睡'
+        return '愛醬沒睡 ╮(╯_╰)╭'
 
 
 @event_register('-l', 'list', '列表')
 def event_list(bot_id, group_id, user_id, message, key, value, **argv):
-    if (group_id is None) or (key in cfg['詞組']['自己的']):
-        return '、'.join([k.keyword for k in UserKeyword.get(user_id)])
-    elif user_id is not None:
+    if group_id is None or key in cfg['詞組']['自己的']:
+        if user_id is None:
+            return '你沒有個人列表喔\nhttps://goo.gl/zTwaL2'
+        else:
+            return '、'.join([k.keyword for k in UserKeyword.get(user_id)])
+    else:
         return '、'.join([k.keyword for k in UserKeyword.get(group_id)]) \
                 + '\n\n查詢個人關鍵字輸入 列表=我'
+            
 
 
 @event_register('-a', 'add', 'keyword', '新增', '關鍵字', '學習')
 def event_add(bot_id, group_id, user_id, message, key, value, **argv):
     MessageLogs.add(group_id, user_id, nAIset=1) #紀錄次數
-    filter_fuck = (group_id is None or UserSettings.get(group_id, 'filter_fuck', True))
-    if filter_fuck and isValueHaveKeys(message, cfg['詞組']['髒話']):
-        return '愛醬覺得說髒話是不對的!!'
-
     if key is None:
         return cfg['學習說明']
 
@@ -139,42 +143,72 @@ def event_add(bot_id, group_id, user_id, message, key, value, **argv):
 
         return '\n'.join(reply_message) if len(reply_message) > 1 else '喵喵喵? 愛醬不記得<%s>' % (key)
 
+    key = key.strip(' \n')
+    value = value.strip(' \n')
     while '***' in key: key = key.replace('***', '**')
     while '|||' in key: key = key.replace('|||', '||')
     while '___' in key: key = key.replace('___', '__')
-        
-    for i in value.replace('__', '||').split('||'):
-        i = i.strip()
-        if i[:4] == 'http' and not is_image_and_ready(i):
-            return '<%s>\n愛醬發現圖片網址是錯誤的\n請使用格式(jpg, png)\n短網址或網頁嵌圖片可能無效\n必須使用https' % i
-        break #如果全部都檢查時間會太久 只幫第一個檢查格式 通常使用者圖床也會使用同一個 應該不會有問題
+
+    if key == '愛醬**' or key == '**愛醬**':
+        return '請不用使用【愛醬**】跟【**愛醬**】喔'
+
+    #保護模式過濾 之後option寫入database將此邏輯合併計算中
+    n = value.rfind('##')
+    if n > -1 and '保護' in value[n:] and key[:2] == '**' and key[-2:] == '**':
+        return '為了避免過度觸發\n保護模式關鍵字不接受前後**喔'
 
     reply_message = ['<%s>記住了喔 ' % key]
 
-    if group_id is not None and UserKeyword.add_and_update(group_id, user_id, key, value):
-        reply_message.append('(群組)')
+    try:
+        if group_id is not None and UserKeyword.add_and_update(group_id, user_id, key, value):
+            reply_message.append('(群組)')
 
-    if user_id is not None and UserKeyword.add_and_update(user_id, user_id, key, value):
-        reply_message.append('(個人)')
-    else:
-        reply_message.append('(不儲存個人)\nhttps://goo.gl/zTwaL2')
+        if user_id is not None and UserKeyword.add_and_update(user_id, user_id, key, value):
+            reply_message.append('(個人)')
+        else:
+            reply_message.append('(不儲存個人)\nhttps://goo.gl/zTwaL2')
+    except Exception as e:
+        return '學習失敗: %s' + str(e)
+
+    level = len(key) - key.count('**')*(len('**')+1)  #database的UserKeyword.level 懶得改上面
+    if level < 0:
+        reply_message.append('\n愛醬非常不建議這種會過度觸發的詞喔\n請慎用')
+    elif level == 0:
+        reply_message.append('\n這種容易觸發的詞容易造成過多訊息喔\n請注意使用')
+    elif level >= 7:
+        reply_message.append('\n這種詞命中率較低喔 請善加利用萬用字元雙米號')
+
+    for i in value.replace('__', '||').split('||'):
+        i = i.strip()
+        if i[:4] == 'https' and not is_image_and_ready(i):
+            reply_message.append('<%s>\n愛醬發現圖片網址是錯誤的\n請使用格式(jpg, png)\n短網址或網頁嵌圖片可能無效\n必須使用https' % i)
+        break #如果全部都檢查時間會太久 只幫第一個檢查格式 通常使用者圖床也會使用同一個 應該不會有問題
+
+    #保護模式提醒 之後option寫入database將此邏輯合併計算中
+    n = value.rfind('##')
+    if n > -1 and '保護' in value[n:]:
+        reply_message.append('\n(此為保護關鍵字 只有你可以刪除及修改 為了避免爭議 建議不要濫用)')
         
     return ''.join(reply_message)
 
 
-@event_register('-d', 'delete', 'del', '刪除', '移除', '忘記', '遺忘')
+@event_register('-d', 'delete', 'del', '刪除', '移除')
 def event_delete(bot_id, group_id, user_id, message, key, value, **argv):
     MessageLogs.add(group_id, user_id, nAIset=1) #紀錄次數
     if key is None:
         return '格式:\n刪除=<關鍵字>'
 
+    key = key.strip(' \n')
     reply_message = ['<%s>刪除了喔 ' % (key)]
 
-    if group_id is not None and UserKeyword.delete(group_id, key):
-        reply_message.append('(群組)')
+    try:
+        if group_id is not None and UserKeyword.delete(group_id, user_id, key):
+            reply_message.append('(群組)')
 
-    if user_id is not None and UserKeyword.delete(user_id, key):
-        reply_message.append('(個人)')
+        if user_id is not None and UserKeyword.delete(user_id, user_id, key):
+            reply_message.append('(個人)')
+    except Exception as e:
+        return '刪除失敗: %s' + str(e)
         
     return ''.join(reply_message) if len(reply_message) > 1 else '喵喵喵? 愛醬不記得<%s>' % (key)
 
@@ -183,7 +217,7 @@ def event_delete(bot_id, group_id, user_id, message, key, value, **argv):
 def event_opinion(bot_id, group_id, user_id, message, key, value, **argv):
     MessageLogs.add(group_id, user_id, nAIset=1) #紀錄次數
     if key is None:
-        return '愛醬不知道你想..回報什麼?'
+        return '【意見=內容】\n如果有bug的話請提供問題的文字喔'
     try:
         bots['admin'].send_message(cfg['admin_line'], '%s\n%s\n%s\n%s' % (bot_id, group_id, user_id, message))
         return '訊息已經幫你傳給主人了\n(如果有問題請描述)'
@@ -194,32 +228,86 @@ def event_opinion(bot_id, group_id, user_id, message, key, value, **argv):
 @event_register('-s', 'set', 'settings', '設定', '設置')
 def event_set(bot_id, group_id, user_id, message, key, value, **argv):
     MessageLogs.add(group_id, user_id, nAIset=1) #紀錄次數
-    if group_id is None:
-        return '目前沒有個人設定喵'
-    else:
-        if key == '全群組關鍵字':
-            UserSettings.update(group_id, all_group_keyword=str2bool(value))
-            return '設定完成'
-        elif key == '髒話過濾':
-            UserSettings.update(group_id, filter_fuck=str2bool(value))
-        else:
+    
+    if group_id is not None:
+        if value is None:
             return (
-                '目前可使用:\n'
+                '設定=別理我=開/關\n'
+                '設定=全回應=開/關\n'
+                '設定=全圖片=開/關(需要全回應)\n'
                 '設定=髒話過濾=開/關\n'
-                '設定=全群組關鍵字=開/閉\n(可以使用別的群組的關鍵字)\n'
+                '設定=疲勞=數字(未實裝)'
             )
+        try:
+            if key == '別理我':
+                UserSettings.update(user_id, no_respond=str2bool(value)) #唯一例外可以在群組使用的個人設定
+                return '設定完成 (個人)'
+            if key == '髒話過濾':
+                UserSettings.update(group_id, filter_fuck=str2bool(value))
+                return '設定完成 (群組)'
+            if key == '愛醬全回應' or key == '全回應':
+                UserSettings.update(group_id, all_reply=str2bool(value))
+                return '設定完成 (群組)'
+            if key == '愛醬全圖片' or key == '全圖片':
+                UserSettings.update(group_id, all_image=str2bool(value))
+                return '設定完成 (群組)'
+            if key == '疲勞':
+                UserSettings.update(group_id, fatigue=value)
+                return '設定完成 (群組)'
+            return '沒有這個設定或是你無法使用這個設定喔'
+        except Exception as e:
+            return '設定錯誤 %s' % str(e)
+    if user_id is not None:
+        if value is None:
+            return (
+                '設定=別理我=開/關\n'
+                '設定=全回應=開/關\n'
+                '設定=全圖片=開/關(需要全回應)'
+            )
+        try:
+            if key == '別理我':
+                UserSettings.update(user_id, no_respond=str2bool(value))
+                return '設定完成 (個人)'
+            if key == '愛醬全回應' or key == '全回應':
+                UserSettings.update(user_id, all_reply=str2bool(value))
+                return '設定完成 (個人)'
+            if key == '愛醬全圖片' or key == '全圖片':
+                UserSettings.update(user_id, all_image=str2bool(value))
+                return '設定完成 (個人)'
+            return '沒有這個設定或是你無法使用這個設定喔'
+        except Exception as e:
+            return '設定錯誤 %s' % str(e)
+    else:
+        return '權限不足\nhttps://goo.gl/zTwaL2'
+    
 
 
 
 MessageLogs_texts = yaml.load(open('logs.yaml', 'r', encoding='utf-8-sig'))
 @event_register('log', 'logs', '紀錄', '回憶')
 def event_log(bot_id, group_id, user_id, message, key, value, **argv):
-    if group_id is None:
-        return '個人版目前還沒開放喔'
+    if group_id is None or key in cfg['詞組']['自己的']:
+        if user_id is None:
+            return '你無法使用此功能喔\nhttps://goo.gl/zTwaL2'
+        reply_message = []
+        try:
+            user_name = bots[bot_id].get_group_member_profile(group_id, user_id).display_name
+        except:
+            user_name = '你'
+        data = MessageLogs.get(user_id=user_id)
+        reply_message.append('愛醬記得 %s...\n' % user_name)
+        reply_message.append('調教愛醬 %s 次' % data['nAIset'])
+        reply_message.append('跟愛醬說話 %s 次' % data['nAItrigger'])
+        reply_message.append('有 %s 次對話' % data['nText'])
+        reply_message.append('有 %s 次貼圖' % data['nSticker'])
+        reply_message.append('有 %s 次傳送門' % data['nUrl'])
+        reply_message.append('講過 %s 次「幹」' % data['nFuck'])
+        reply_message.append('總計 %s 個字\n' % data['nLenght'])
+        return '\n'.join(reply_message) + '\n(個人版目前只能查詢紀錄)(吐嘲以後再增加)'
     else:
         reply_message = []
         if key is not None and key.lower() in cfg['詞組']['全部']:
-            data = MessageLogs.get(group_id)
+            data = MessageLogs.get(group_id=group_id)
             reply_message.append('愛醬記得這個群組...')
             reply_message.append('有 %s 個人說過話' % data['users'])
             reply_message.append('愛醬被調教 %s 次' % data['nAIset'])
@@ -262,7 +350,7 @@ def event_shorten_url(bot_id, group_id, user_id, message, key, value, **argv):
 
 
 #from Webtorrent import Webtorrent, WebtorrentIsExistException
-@event_register('bt', 'BT', '開車', '飆車')
+@event_register('bt', 'BT', '飆車')
 def event_bt(bot_id, group_id, user_id, message, key, value, **argv):
     return '開車功能暫時關閉'
 
@@ -361,6 +449,30 @@ def event_rss_nyaa2(bot_id, group_id, user_id, message, key, value, **argv):
     return cfg['回應']['找不到']
 
 
+@event_register('Google', 'GOOGLE', 'google', 'GOO',  'Goo', 'goo')
+def event_google(bot_id, group_id, user_id, message, key, value, **argv):
+    if key is None:
+        return cfg['google說明']
+    return google_search(key)
+
+
+@event_register('e-hentai', 'E-hentai', 'ehentai', 'Ehentai', 'e變態', 'E變態')
+def event_ehentai(bot_id, group_id, user_id, message, key, value, **argv):
+    if group_id is not None:
+        return '暫時限制只能在1對1使用喔'
+    if key is None:
+        return cfg['ehentai說明']
+    return ehentai_search(key)
+
+@event_register('exhentai', 'Exhentai', 'EXhentai', 'ex變態', 'Ex變態', 'EX變態')
+def event_exhentai(bot_id, group_id, user_id, message, key, value, **argv):
+    if group_id is not None:
+        return '暫時限制只能在1對1使用喔'
+    if key is None:
+        return cfg['exhentai說明']
+    return exhentai_search(key)
+
+
 @event_register('')
 def event_main(bot_id, group_id, user_id, message, key, value, **argv):
     #後處理
@@ -377,7 +489,12 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                     opt[a] = '='.join(b)
                 else:
                     reply_message_new.append(i)
-            reply_message = ''.join(reply_message_new)
+            #reply_message = ''.join(reply_message_new)
+            reply_message = reply_message[:reply_message.find('##')] #參數之後會由add儲存至database 這邊之後會廢棄
+
+        filter_fuck = (group_id is None or UserSettings.get(group_id, 'filter_fuck', True))
+        if filter_fuck and isValueHaveKeys(message, cfg['詞組']['髒話']):
+            return '愛醬覺得說髒話是不對的!!\n如有需要請使用【設定=髒話過濾=關】關閉'
 
         #隨機 (算法:比重)
         if '__' in reply_message:
@@ -471,67 +588,100 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
             for msg_split in msg.split('||'):
                 reply_message_new.append(msg_split)
         return reply_message_new
+
+    def check(userkeyword_query, filter_url=False):
+        keys = []
+        result = []
+        for row in userkeyword_query:
+            if filter_url and 'https:' in row.reply:
+                continue
+            if row.keyword == message:
+                result.append(row.reply)
+            else:
+                keys.append((row.keyword, row.reply))
+
+        if len(result) > 0:
+            return later(choice(result)) #結果集隨機抽取一個
+                
+        result = []
+        for k, v in keys:
+            kn = -1
+            k_arr = k.split('**')
+            for k2 in k_arr:
+                if k2 != '':
+                    n = message.find(k2)
+                    if n > kn:
+                        kn = n
+                    else:
+                        break
+                #最後檢查前後如果為任意字元的情況 那相對的最前最後一個字元必須相等 雖然使用字串會比較精準 暫時先用一個字元 如果**混在中間有可能誤判 但是問題不大
+                if k_arr == '' or k == '': break
+                if k_arr[0] != '' and message[0] != k[0]: break
+                if k_arr[-1] != '' and message[-1] != k[-1]: break
+            else:
+                result.append(v)
+        if len(result) > 0:
+            return later(choice(result)) #結果集隨機抽取一個
+        return None
             
-    message = message.lower()
+    #這裡開始是邏輯
+    message = message.lower().strip(' \n')
     if 'http:' in message or 'https:' in message: #如果內容含有網址 不觸發 順便紀錄
         MessageLogs.add(group_id, user_id, nUrl=1) #紀錄次數
         return None
     else:
         MessageLogs.add(group_id, user_id, nText=1, nFuck=(message.count('幹') + message.count('fuck')), nLenght=len(message)) #紀錄次數
 
+    if user_id is not None and UserSettings.get(user_id, 'no_respond', False): #不回應
+        return None
+
+    if message != '愛醬' and message[:2] == '愛醬':
+        message_old = message
+        message = message[2:].strip(' \n')
+        reply_message = check(UserKeyword.query.filter_by(id=group_id))
+        if reply_message is not None:
+            return reply_message
+
+        reply_message = check(UserKeyword.query.filter_by(id=user_id))
+        if reply_message is not None:
+            return reply_message
+        message = message_old #暫時先這樣
+
     if UserSettings_temp.has_option(group_id, '暫停'):
         if time() > UserSettings_temp.getfloat(group_id, '暫停'):
             UserSettings_temp.remove_option(group_id, '暫停')
             UserSettings_temp.save()
-            return '愛醬大復活！'
-        else:
-            return None
-
-    if group_id is not None:
-        reply_message = UserKeyword.get(group_id, message)
+            return 'ヽ(*´∀`)ﾉ 愛醬大復活！'
+    else:
+        reply_message = check(UserKeyword.query.filter_by(id=group_id))
         if reply_message is not None:
-            return later(reply_message.reply)
-        
-    if user_id is not None:
-        reply_message = UserKeyword.get(user_id, message)
-        if reply_message is not None:
-            return later(reply_message.reply)
+            return reply_message
 
-    keys = []
-    if group_id is not None:
-        for i in UserKeyword.get(group_id):
-            keys.append((i.keyword, i.reply))
-    if user_id is not None:
-        for i in UserKeyword.get(user_id):
-            keys.append((i.keyword, i.reply))
+        if user_id != cfg['admin_line']: #不使用我自己的個人字庫
+            reply_message = check(UserKeyword.query.filter_by(id=user_id))
+            if reply_message is not None:
+                return reply_message
 
-    for k, v in keys:
-        kn = -1
-        k_arr = k.split('**')
-        for k2 in k_arr:
-            if k2 != '':
-                n = message.find(k2)
-                if n > kn:
-                    kn = n
-                else:
-                    break
-            #最後檢查前後如果為任意字元的情況 那相對的最前最後一個字元必須相等 雖然使用字串會比較精準 暫時先用一個字元 如果**混在中間有可能誤判 但是問題不大
-            if k_arr[0] != '' and message[0] != k[0]: break
-            if k_arr[-1] != '' and message[-1] != k[-1]: break
-        else:
-            return later(v)
-
-    #使用全群組的關鍵字 限無**
-    if group_id is not None and UserSettings.get(group_id, 'all_group_keyword', False):
-        for k in UserKeyword.query.filter_by(super=0, keyword=message).order_by(UserKeyword._id.desc()):
-            return later(k.reply)
+    if group_id is None or (user_id is not None and UserSettings.get(user_id, 'all_reply', default=False)) or (group_id is not None and UserSettings.get(group_id, 'all_reply', default=True)):
+        filter_url = (user_id is not None and UserSettings.get(user_id, 'all_image', default=False)) or (group_id is not None and UserSettings.get(group_id, 'all_image', default=False))
+        if message == '愛醬':
+            reply_message = check(UserKeyword.query, filter_url=not filter_url)
+            if reply_message is not None:
+                return reply_message
+        if message[:2] == '愛醬':
+            message = message[2:].strip(' \n')
+            reply_message = check(UserKeyword.query.filter(UserKeyword.level >= 0), filter_url=not filter_url)
+            if reply_message is not None:
+                return reply_message
+            
+    
 
     if group_id is None:
         message = message.strip()
         if message[:4] == 'http':
             return '愛醬幫你申請短網址了喵\n%s' % google_shorten_url(message)
         else:
-            return '群組指令說明輸入【指令】\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n其他功能如果有建議請使用回報'
+            return '群組指令說明輸入【指令】\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n<1:1自動開啟全回應模式>\n<此功能測試中 字庫還不多>\n其他功能如果有建議請使用回報'
     else:
         return None
 

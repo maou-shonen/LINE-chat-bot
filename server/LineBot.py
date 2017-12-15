@@ -1,4 +1,4 @@
-from api import cfg
+from api import cfg, is_image_and_ready
 from linebot import LineBotApi
 from linebot.exceptions import LineBotApiError
 from linebot.models import TextMessage, ImageSendMessage, TextSendMessage
@@ -23,10 +23,16 @@ class LineBot(LineBotApi):
         
         message_object = []
         for message in messages[:5]:
+            message = message.strip(' \n')
+            if message == '' or message == '\n':
+                message_object.append(TextSendMessage('<空白內容>'))
             if message[:6] == 'https:':
-                message = message.strip()
-                message_object.append(ImageSendMessage(message, message))
-            elif message != '':
+                message = message.strip(' \n')
+                if is_image_and_ready(message):
+                    message_object.append(ImageSendMessage(message, message))
+                else:
+                    message_object.append(TextSendMessage(message))
+            else:
                 if len(message) > 2048:
                     message = message[:2048]
                 message_object.append(TextSendMessage(message))
@@ -35,9 +41,12 @@ class LineBot(LineBotApi):
             if len(message_object) > 0:
                 LineBotApi.reply_message(self, reply_token, message_object)
         except LineBotApiError as e:
-            print(e.status_code)
-            print(e.error.message)
-            print(e.error.details)
+            Exception(''.join([
+                '[錯誤內容]' + message,
+                str(e.status_code),
+                str(e.error.message),
+                str(e.error.details),
+            ]))
 
 
 bots = {}

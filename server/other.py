@@ -1,6 +1,9 @@
 import json
 import requests
 from api import cfg
+from bs4 import BeautifulSoup
+from urllib.parse import urlencode
+from time import time, sleep
 
 
 def google_shorten_url(url):
@@ -9,11 +12,135 @@ def google_shorten_url(url):
     api_url = 'https://www.googleapis.com/urlshortener/v1/url?key=%s' % (cfg['google_api_key'])
     datas = {'longUrl': url}
     headers = {'content-type': 'application/json'}
-    ret = requests.post(api_url, data=json.dumps(datas), headers=headers)
     try:
+        ret = requests.post(api_url, data=json.dumps(datas), headers=headers)
         return ret.json()['id']
     except:
-        return '[網址格式錯誤]'
+        return url #'[網址格式錯誤]'
+
+
+google_search_time = 0
+def google_search(key):
+    headers = {'User-Agent':cfg['user_agent']}
+    url = 'https://www.google.com.tw/search?' + urlencode({
+        'q':key,
+        'safe':'off',
+    })
+    global google_search_time
+    while time() - google_search_time < 1:
+        sleep(1.0)
+    google_search_time = time() + 1
+
+    r = requests.get(url, headers=headers)
+    if not r.ok:
+        return '愛醬搜尋失敗了！'
+    reply_messages = []
+    soup = BeautifulSoup(r.text, 'lxml')
+    results = soup.select('h3.r a')
+    for result in results[:5]:
+        link = result.get('href')
+        #link = 'https://transparencyreport.google.com/safe-browsing/search?' + urlencode({'rul':link}) 
+        #link = google_shorten_url(link)
+        reply_messages.append('%s\n%s' % (result.text, link))
+    
+    if len(reply_messages) > 0:
+        reply_messages.append('<查詢更多>\n%s' % url)
+        return '\n\n'.join(reply_messages) + '\n(此功能實驗中 可能會被玩壞 未來會添加短連結)'
+    return '沒有找到符合的結果喔'
+
+
+ehentai_search_time = 0
+def ehentai_search(key):
+    headers = {'User-Agent':cfg['user_agent']}
+    url = 'https://e-hentai.org/?' + urlencode({
+        'f_doujinshi':'1',
+        'f_manga':'1',
+        'f_artistcg':'1',
+        'f_gamecg':'1',
+        'f_western':'1',
+        'f_non-h':'1',
+        'f_imageset':'1',
+        'f_cosplay':'1',
+        'f_asianporn':'1',
+        'f_misc':'1',
+        'f_apply':'Apply+Filter',
+        'f_search':key,
+    })
+    global ehentai_search_time
+    while time() - ehentai_search_time < 1:
+        sleep(1.0)
+    ehentai_search_time = time() + 1
+
+    r = requests.get(url, headers=headers)
+    if not r.ok:
+        return '愛醬搜尋失敗了！'
+    reply_messages = []
+    soup = BeautifulSoup(r.text, 'lxml')
+    results = soup.select('.it5')
+    for result in results[:5]:
+        link = result.find('a').get('href')
+        #link = 'https://transparencyreport.google.com/safe-browsing/search?' + urlencode({'rul':link}) 
+        #link = google_shorten_url(link)
+        reply_messages.append('%s\n%s' % (result.text, link))
+    
+    if len(reply_messages) > 0:
+        reply_messages.append('<查詢更多>\n%s' % url)
+        return '\n\n'.join(reply_messages) + '\n(此功能實驗中 可能會被玩壞 未來會添加短連結)'
+    return '沒有找到符合的結果喔'
+
+
+
+
+client = requests.Session()
+client.headers.update({'User-Agent': cfg['user_agent']})
+client.get('https://e-hentai.org')
+client.post('https://forums.e-hentai.org/index.php?act=Login&CODE=01', data={
+	'CookieDate': '1',
+	'b': 'd',
+	'bt': '1-1',
+	'UserName':'q267009886',
+	'PassWord':'qq123456',
+	'ipb_login_submit':'Login!',
+})
+
+exhentai_search_time = 0
+def exhentai_search(key):
+    headers = {'User-Agent':cfg['user_agent']}
+    url = 'https://exhentai.org/?' + urlencode({
+        'f_doujinshi':'1',
+        'f_manga':'1',
+        'f_artistcg':'1',
+        'f_gamecg':'1',
+        'f_western':'1',
+        'f_non-h':'1',
+        'f_imageset':'1',
+        'f_cosplay':'1',
+        'f_asianporn':'1',
+        'f_misc':'1',
+        'f_apply':'Apply+Filter',
+        'f_search':key,
+    })
+    global exhentai_search_time
+    while time() - exhentai_search_time < 1:
+        sleep(1.0)
+    exhentai_search_time = time() + 1
+
+    r = client.get(url)
+    if not r.ok:
+        return '愛醬搜尋失敗了！'
+    reply_messages = []
+    soup = BeautifulSoup(r.text, 'lxml')
+    results = soup.select('.it5')
+    for result in results[:5]:
+        link = result.find('a').get('href')
+        #link = 'https://transparencyreport.google.com/safe-browsing/search?' + urlencode({'rul':link}) 
+        #link = google_shorten_url(link)
+        reply_messages.append('%s\n%s' % (result.text, link))
+    
+    if len(reply_messages) > 0:
+        reply_messages.append('<查詢更多>\n%s' % url)
+        return '\n\n'.join(reply_messages) + '\n(此功能實驗中 可能會被玩壞 未來會添加短連結)'
+    return '沒有找到符合的結果喔'
 
 
 #pixiv功能暫時不理它

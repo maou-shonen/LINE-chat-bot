@@ -50,8 +50,30 @@ def isFloat(s):
         return False
     
 
+is_image_and_ready_cache = {}
 def is_image_and_ready(url):
     try:
-        return (requests.head(url, timeout=5).headers.get('content-type') in ['image/jpeg', 'image/png'])
+        ct = is_image_and_ready_cache.get(url, requests.head(url, timeout=5).headers.get('content-type'))
+        is_image_and_ready_cache[url] = ct
+        return ct in ['image/jpeg', 'image/png']
     except:
         return False
+
+def getUrlType(url):
+    try:
+        ct, fe = requests.head(url, timeout=10).headers.get('content-type').split('/')
+
+        return (requests.head(url, timeout=5).headers.get('content-type') in ['image/jpeg', 'image/png'])
+    except:
+        return '讀取過慢或發生錯誤 類型不明'
+    if ct == 'text':
+        return '一般網頁'
+    if ct == 'image':
+        if 1:
+            return '圖片 %s ' % fe
+        else:
+            support = '格式支援' if fe in ['jpeg', 'png'] else '格式不支援'
+        return '圖片 %s %s' % (fe, support)
+    return '其他格式 目前不支援'
+
+

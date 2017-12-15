@@ -19,7 +19,7 @@ class UserKeyword(db.Model):
     id      = db.Column(db.String(35))
     author  = db.Column(db.String(35))
     keyword = db.Column(db.String(128), nullable=False)
-    reply   = db.Column(db.String(2048), nullable=False)
+    reply   = db.Column(db.TEXT, nullable=False)
     super   = db.Column(db.Boolean)
     level   = db.Column(db.Integer)
 
@@ -34,6 +34,11 @@ class UserKeyword(db.Model):
     @staticmethod
     def add_and_update(id, author, keyword, reply):
         for row in UserKeyword.query.filter_by(id=id, keyword=keyword):
+            #關鍵字保護
+            n = row.reply.rfind('##')
+            if n > -1 and '保護' in row.reply[n:] and row.author != author:
+                raise Exception('此關鍵字已被保護\n只有原設定者可以修改')
+
             row.author = author
             row.reply = reply
             break
@@ -42,8 +47,13 @@ class UserKeyword(db.Model):
         return True
 
     @staticmethod
-    def delete(id, keyword):
+    def delete(id, author, keyword):
         for row in UserKeyword.query.filter_by(id=id, keyword=keyword):
+            #關鍵字保護
+            n = row.reply.rfind('##')
+            if n > -1 and '保護' in row.reply[n:] and row.author != author:
+                raise Exception('此關鍵字已被保護\n只有原設定者可以修改')
+
             db.session.delete(row)
             return True
         return False
@@ -100,9 +110,9 @@ class MessageLogs(db.Model):
             data.nLenght += nLenght
 
     @staticmethod
-    def get(group_id):
+    def get(**argv):
         data = {}.fromkeys(['users', 'nAIset', 'nAItrigger', 'nText', 'nSticker', 'nUrl', 'nFuck', 'nLenght'], 0)
-        for row in MessageLogs.query.filter_by(group_id=group_id):
+        for row in MessageLogs.query.filter_by(**argv):
             data['users'] += 1
             data['nAIset'] += row.nAIset
             data['nAItrigger'] += row.nAItrigger
@@ -134,7 +144,7 @@ class UserSettings(db.Model):
             data = UserSettings(id)
             db.session.add(data)
         return data
-
+        
         '''
         for row in UserSettings.query.filter_by(id=id):
             return row
