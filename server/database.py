@@ -180,5 +180,16 @@ class UserSettings(db.Model):
         data = UserSettings.__get(id)
         return json.loads(data.options).get(option, default)
 
+
+###################################
+#   手動克隆關鍵字
+def UserKeywordClone(_from, to):
+    for i in UserKeyword.query.filter_by(id=_from):
+        UserKeyword.add_and_update(to, _from, i.keyword, i.reply)
+        print(i.keyword)
+    db.session.commit()
+    print('------------------\n完成')
+
+
 if __name__ == '__main__':
     db.create_all()

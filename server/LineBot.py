@@ -1,4 +1,5 @@
 from api import cfg, is_image_and_ready
+
 from linebot import LineBotApi
 from linebot.exceptions import LineBotApiError
 from linebot.models import TextMessage, ImageSendMessage, TextSendMessage
@@ -25,7 +26,7 @@ class LineBot(LineBotApi):
         for message in messages[:5]:
             message = message.strip(' \n')
             if message == '' or message == '\n':
-                message_object.append(TextSendMessage('<空白內容>'))
+                message_object.append(TextSendMessage('<設定錯誤此為空白內容>'))
             if message[:6] == 'https:':
                 message = message.strip(' \n')
                 if is_image_and_ready(message):

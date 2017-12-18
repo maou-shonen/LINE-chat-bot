@@ -45,7 +45,7 @@ def google_search(key):
     
     if len(reply_messages) > 0:
         reply_messages.append('<查詢更多>\n%s' % url)
-        return '\n\n'.join(reply_messages) + '\n(此功能實驗中 可能會被玩壞 未來會添加短連結)'
+        return '\n\n'.join(reply_messages) + '\n(未來會添加短連結)'
     return '沒有找到符合的結果喔'
 
 
@@ -85,7 +85,7 @@ def ehentai_search(key):
     
     if len(reply_messages) > 0:
         reply_messages.append('<查詢更多>\n%s' % url)
-        return '\n\n'.join(reply_messages) + '\n(此功能實驗中 可能會被玩壞 未來會添加短連結)'
+        return '\n\n'.join(reply_messages) + '\n(未來會添加短連結)'
     return '沒有找到符合的結果喔'
 
 
@@ -139,7 +139,7 @@ def exhentai_search(key):
     
     if len(reply_messages) > 0:
         reply_messages.append('<查詢更多>\n%s' % url)
-        return '\n\n'.join(reply_messages) + '\n(此功能實驗中 可能會被玩壞 未來會添加短連結)'
+        return '\n\n'.join(reply_messages) + '\n(未來會添加短連結)'
     return '沒有找到符合的結果喔'
 
 

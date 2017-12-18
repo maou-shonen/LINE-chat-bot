@@ -48,7 +48,7 @@ def event_text_main(bot_id, group_id, user_id, message, reply_token, **argv):
             for mid in [user_id, group_id]:
                 if mid is not None and UserSettings_temp.has_option(mid, '臨時公告'):
                     try:
-                        user_name = bots[bot_id].get_group_member_profile(group_id, user_id).display_name
+                        user_name = bots[bot_id].get_group_member_profile(group_id, user_id).display_name if mid != group_id else ''
                     except:
                         user_name = ''
                     reply_message.append('<作者回覆%s>\n%s' % (user_name, UserSettings_temp.get(mid, '臨時公告')))
@@ -151,6 +151,12 @@ def event_add(bot_id, group_id, user_id, message, key, value, **argv):
 
     if key == '愛醬**' or key == '**愛醬**':
         return '請不用使用【愛醬**】跟【**愛醬**】喔'
+
+    if key != '愛醬' and key[:2] == '愛醬':
+        key = key[2:].strip(' \n')
+    
+    if key == '':
+        return cfg['學習說明']
 
     #保護模式過濾 之後option寫入database將此邏輯合併計算中
     n = value.rfind('##')
@@ -261,18 +267,10 @@ def event_set(bot_id, group_id, user_id, message, key, value, **argv):
         if value is None:
             return (
                 '設定=別理我=開/關\n'
-                '設定=全回應=開/關\n'
-                '設定=全圖片=開/關(需要全回應)'
             )
         try:
             if key == '別理我':
                 UserSettings.update(user_id, no_respond=str2bool(value))
-                return '設定完成 (個人)'
-            if key == '愛醬全回應' or key == '全回應':
-                UserSettings.update(user_id, all_reply=str2bool(value))
-                return '設定完成 (個人)'
-            if key == '愛醬全圖片' or key == '全圖片':
-                UserSettings.update(user_id, all_image=str2bool(value))
                 return '設定完成 (個人)'
             return '沒有這個設定或是你無法使用這個設定喔'
         except Exception as e:
@@ -288,7 +286,7 @@ MessageLogs_texts = yaml.load(open('logs.yaml', 'r', encoding='utf-8-sig'))
 def event_log(bot_id, group_id, user_id, message, key, value, **argv):
     if group_id is None or key in cfg['詞組']['自己的']:
         if user_id is None:
-            return '你無法使用此功能喔\nhttps://goo.gl/zTwaL2'
+            return '權限不足\nhttps://goo.gl/zTwaL2'
         reply_message = []
         try:
             user_name = bots[bot_id].get_group_member_profile(group_id, user_id).display_name
@@ -339,7 +337,7 @@ def event_log(bot_id, group_id, user_id, message, key, value, **argv):
         elif rnd == 7: reply_message_random = get_messagelogs_max('nLenght')
         reply_message.append(reply_message_random[0])
 
-        reply_message.append('(完整紀錄輸入「回憶=全部」)\n(如果想寫愛醬文本請回報)')
+        reply_message.append('(個人紀錄輸入「回憶=我」)\n(完整紀錄輸入「回憶=全部」)')
         return ['\n'.join(reply_message), reply_message_random[1]]
 
 
@@ -492,7 +490,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
             #reply_message = ''.join(reply_message_new)
             reply_message = reply_message[:reply_message.find('##')] #參數之後會由add儲存至database 這邊之後會廢棄
 
-        filter_fuck = (group_id is None or UserSettings.get(group_id, 'filter_fuck', True))
+        filter_fuck = (group_id is not None and UserSettings.get(group_id, 'filter_fuck', True))
         if filter_fuck and isValueHaveKeys(message, cfg['詞組']['髒話']):
             return '愛醬覺得說髒話是不對的!!\n如有需要請使用【設定=髒話過濾=關】關閉'
 
@@ -526,59 +524,82 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                 if is_minimum and is_minimum_pool:
                     minimum_pool.append(msg)
 
-            count = int(message[message.rfind('*')+1:]) if '*' in message and message[message.rfind('*')+1:].isdigit() else 1
-            if count > 10000: count = 10000
-            if count <  1: count = 1
-            if count == 1 and '種子' in opt and opt['種子'].isdigit() and int(opt['種子']) > 0:
-                seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
-                seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
-            else:
-                try:
-                    #random.org的隨機據說為真隨機
-                    if count > 1:
-                        r = requests.get('https://www.random.org/integers/?num=%s&min=0&max=%s&col=1&base=10&format=plain&rnd=new' % (count, int(weight_total)), timeout=3)
-                        if 'Error' in r.text:
-                            raise
-                        seed = r.text.split('\n')[:-1]
-                    else:
-                        raise
-                except:
-                    seed = [uniform(0, int(weight_total)) for i in range(count)]
+            if opt.get('百分比', '0').isdigit(): #百分比隨機模式
+                number = int(opt.get('百分比', '0'))
+                if number > 0:
+                    reply_message = []
+                    total = 100.0
 
-            minimum_count = 0
-            minimum_index = int(opt.get('保底', 10))
-            reply_message_new = {}
-            reply_message_image = []
-            for i in range(count):
-                #r = uniform(0, weight_total) if seed == -1 else seed
-                r = float(seed[i]) if type(seed) == list else seed
-                for msg, msg_opt in result_pool.items():
-                    if r > msg_opt['weight']:
-                        r -= msg_opt['weight']
-                    else:
-                        minimum_count = 0 if msg_opt['is_minimum'] else minimum_count + 1
-                        if minimum_count >= minimum_index and len(minimum_pool) > 0:
-                            minimum_count = 0
-                            msg = choice(minimum_pool)
-                        if msg[:6] == 'https:':
-                            reply_message_image.append(msg)
-                            if len(reply_message_image) > 5:
-                                break
+                    n = 0
+                    for msg, msg_opt in result_pool.items():
+                        n += 1
+                        if n >= number or n >= len(result_pool):
+                            ratio = total
+                            total = 0
                         else:
-                            reply_message_new[msg] = (reply_message_new[msg] + 1) if msg in reply_message_new else 1
-                        break
-                
-            if len(reply_message_new) > 0:
-                if count == 1:
-                    reply_message = list(reply_message_new.keys())
+                            ratio = uniform(0, total)
+                            total -= ratio
+                        reply_message.append('%s 占 %3.2f％' % (msg, ratio))
+                        if total <= 0:
+                            break
+
+                    return '\n'.join(reply_message)
+
+
+            else:   #一般隨機模式
+                count = int(message[message.rfind('*')+1:]) if '*' in message and message[message.rfind('*')+1:].isdigit() else 1
+                if count > 10000: count = 10000
+                if count <  1: count = 1
+                if count == 1 and '種子' in opt and opt['種子'].isdigit() and int(opt['種子']) > 0:
+                    seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
+                    seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
+                else:
+                    try:
+                        #random.org的隨機據說為真隨機
+                        if count > 1:
+                            r = requests.get('https://www.random.org/integers/?num=%s&min=0&max=%s&col=1&base=10&format=plain&rnd=new' % (count, int(weight_total)), timeout=3)
+                            if 'Error' in r.text:
+                                raise
+                            seed = r.text.split('\n')[:-1]
+                        else:
+                            raise
+                    except:
+                        seed = [uniform(0, int(weight_total)) for i in range(count)]
+
+                minimum_count = 0
+                minimum_index = int(opt.get('保底', 10))
+                reply_message_new = {}
+                reply_message_image = []
+                for i in range(count):
+                    #r = uniform(0, weight_total) if seed == -1 else seed
+                    r = float(seed[i]) if type(seed) == list else seed
+                    for msg, msg_opt in result_pool.items():
+                        if r > msg_opt['weight']:
+                            r -= msg_opt['weight']
+                        else:
+                            minimum_count = 0 if msg_opt['is_minimum'] else minimum_count + 1
+                            if minimum_count >= minimum_index and len(minimum_pool) > 0:
+                                minimum_count = 0
+                                msg = choice(minimum_pool)
+                            if msg[:6] == 'https:':
+                                reply_message_image.append(msg)
+                                if len(reply_message_image) > 5:
+                                    break
+                            else:
+                                reply_message_new[msg] = (reply_message_new[msg] + 1) if msg in reply_message_new else 1
+                            break
+                    
+                if len(reply_message_new) > 0:
+                    if count == 1:
+                        reply_message = list(reply_message_new.keys())
+                    else:
+                        reply_message = []
+                        for msg, num in reply_message_new.items():
+                            reply_message.append('%s x %s' % (msg, num))
+                        reply_message = ['\n'.join(reply_message)]
                 else:
                     reply_message = []
-                    for msg, num in reply_message_new.items():
-                        reply_message.append('%s x %s' % (msg, num))
-                    reply_message = ['\n'.join(reply_message)]
-            else:
-                reply_message = []
-            reply_message.extend(reply_message_image[:5])
+                reply_message.extend(reply_message_image[:5])
                 
         #這邊有待優化
         if type(reply_message) == str:
@@ -605,21 +626,24 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
                 
         result = []
         for k, v in keys:
-            kn = -1
-            k_arr = k.split('**')
-            for k2 in k_arr:
-                if k2 != '':
-                    n = message.find(k2)
-                    if n > kn:
-                        kn = n
-                    else:
-                        break
-                #最後檢查前後如果為任意字元的情況 那相對的最前最後一個字元必須相等 雖然使用字串會比較精準 暫時先用一個字元 如果**混在中間有可能誤判 但是問題不大
-                if k_arr == '' or k == '': break
-                if k_arr[0] != '' and message[0] != k[0]: break
-                if k_arr[-1] != '' and message[-1] != k[-1]: break
-            else:
-                result.append(v)
+            try:
+                kn = -1
+                k_arr = k.split('**')
+                for k2 in k_arr:
+                    if k2 != '':
+                        n = message.find(k2)
+                        if n > kn:
+                            kn = n
+                        else:
+                            break
+                    #最後檢查前後如果為任意字元的情況 那相對的最前最後一個字元必須相等 雖然使用字串會比較精準 暫時先用一個字元 如果**混在中間有可能誤判 但是問題不大
+                    if k_arr == '' or k == '': break
+                    if k_arr[0] != '' and message[0] != k[0]: break
+                    if k_arr[-1] != '' and message[-1] != k[-1]: break
+                else:
+                    result.append(v)
+            except Exception as e:
+                bots['開發部'].send_message(cfg['admin_line'], '錯誤:%s\ngid:%s\nuid:%s\nmsg:%s\nkey:<%s>\n<%s>' % (str(e), group_id, user_id, message, k, v))
         if len(result) > 0:
             return later(choice(result)) #結果集隨機抽取一個
         return None
@@ -662,8 +686,8 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
             if reply_message is not None:
                 return reply_message
 
-    if group_id is None or (user_id is not None and UserSettings.get(user_id, 'all_reply', default=False)) or (group_id is not None and UserSettings.get(group_id, 'all_reply', default=True)):
-        filter_url = (user_id is not None and UserSettings.get(user_id, 'all_image', default=False)) or (group_id is not None and UserSettings.get(group_id, 'all_image', default=False))
+    if group_id is None or (group_id is not None and UserSettings.get(group_id, 'all_reply', default=True)):
+        filter_url = group_id is None or (group_id is not None and UserSettings.get(group_id, 'all_image', default=False))
         if message == '愛醬':
             reply_message = check(UserKeyword.query, filter_url=not filter_url)
             if reply_message is not None:
@@ -673,7 +697,11 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
             reply_message = check(UserKeyword.query.filter(UserKeyword.level >= 0), filter_url=not filter_url)
             if reply_message is not None:
                 return reply_message
-            
+            else:
+                reply_message = check(UserKeyword.query.filter(UserKeyword.level < 0), filter_url=not filter_url)
+                if reply_message is not None:
+                    return reply_message
+                return '(?)'
     
 
     if group_id is None:
@@ -681,7 +709,7 @@ def event_main(bot_id, group_id, user_id, message, key, value, **argv):
         if message[:4] == 'http':
             return '愛醬幫你申請短網址了喵\n%s' % google_shorten_url(message)
         else:
-            return '群組指令說明輸入【指令】\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n<1:1自動開啟全回應模式>\n<此功能測試中 字庫還不多>\n其他功能如果有建議請使用回報'
+            return '群組指令說明輸入【指令】\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n<1:1自動開啟全回應模式>\n<此功能測試中 字庫還不多>\n<如果開啟全圖片模式有更多回應>\n其他功能如果有建議請使用回報'
     else:
         return None
 
