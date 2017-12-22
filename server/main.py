@@ -31,7 +31,7 @@ def event_text():
 
     if len(reply_message) == 0:
         abort(400)
-    return reply_message
+    return ''
     
 
 @app.route("/sticker", methods=['POST'])

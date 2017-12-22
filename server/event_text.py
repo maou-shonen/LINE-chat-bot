@@ -33,7 +33,7 @@ class EventText():
 
 
     def run(self):
-        print(self.user_id, '>', self.message)
+        print('%s@%s' % (None if self.user_id is None else self.user_id[1:5], self.group_id), '>', self.message)
 
         t0 = time()
         reply_message = self.index()
@@ -58,9 +58,10 @@ class EventText():
                 UserSettings_temp.remove_option(mid, '臨時公告')
                 UserSettings_temp.save()
 
-        bots[self.bot_id].reply_message(self.reply_token, reply_message)
-        t2 = time() - t1 - t0
-        print(self.user_id, '<', reply_message, '(%dms, %dms)' % (t1*1000, t2*1000))
+        if len(reply_message) > 0:
+            bots[self.bot_id].reply_message(self.reply_token, reply_message)
+            t2 = time() - t1 - t0
+            print('%s@%s' % (None if self.user_id is None else self.user_id[1:5], self.group_id), '<', reply_message, '(%dms, %dms)' % (t1*1000, t2*1000))
 
         #刷新時間
         UserStatus.refresh(self.group_id)
@@ -486,8 +487,7 @@ class EventText():
         MessageLogs.add(self.group_id, self.user_id, nText=1, nFuck=(self.message.count('幹') + self.message.count('fuck')), nLenght=len(self.message)) #紀錄次數
 
         #愛醬開頭可以強制呼叫
-        print('ex')
-        if self.message != text['名稱'] and self.message[:2] == text['名稱']:
+        if self.group_id is not None and self.message != text['名稱'] and self.message[:2] == text['名稱']:
             message_old = self.message
             self.message = self.message[2:].strip(' \n')
             reply_message = self.check(UserKeyword.get(self.group_id))
@@ -501,13 +501,11 @@ class EventText():
 
         #睡覺模式
         if UserSettings_temp.has_option(self.group_id, '暫停'):
-            print(time())
-            print(UserSettings_temp.getfloat(self.group_id, '暫停'))
             if time() > UserSettings_temp.getfloat(self.group_id, '暫停'):
                 UserSettings_temp.remove_option(self.group_id, '暫停')
                 UserSettings_temp.save()
                 return text['睡醒']
-        else: #一般模式
+        elif self.group_id is not None: #一般模式
             if not UserSettings.get(self.group_id, self.user_id, '別理我', False): #檢查不理我模式
                 reply_message = self.check(UserKeyword.get(self.group_id))
                 if reply_message is not None:
@@ -545,7 +543,7 @@ class EventText():
                 if reply_message is not None:
                     return reply_message
                 else:
-                    bots['崩崩崩愛醬'].send_message(cfg['admin_line'], message)
+                    bots['崩崩崩愛醬'].send_message(cfg['admin_line'], self.message)
                     reply_message = self.check(userkeyword_arr['<0'], exclude_url=not filter_url)
                     #reply_message = check(UserKeyword.query.filter(UserKeyword.level < 0), filter_url=not filter_url)
                     if reply_message is not None:
@@ -563,7 +561,7 @@ class EventText():
             return None
 
 
-    def check(self, userkeyword_list, exclude_url=True):
+    def check(self, userkeyword_list, exclude_url=False):
         '''
             關鍵字觸發的邏輯檢查
         '''

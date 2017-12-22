@@ -59,6 +59,9 @@ class UserStatus(db.Model):
         '''
             檢查公告版本
         '''
+        if id is None:
+            return
+
         row = UserStatus.__get(id)
 
         if row.news != cfg['公告']['ver']:
@@ -69,7 +72,7 @@ class UserStatus(db.Model):
 
 
 ###############################################
-#   使用者狀態
+#   使用者關鍵字
 class UserKeyword(db.Model):
     _id     = db.Column(db.Integer, autoincrement=True, primary_key=True)
     id      = db.Column(db.String(35))
@@ -126,7 +129,7 @@ class UserKeyword(db.Model):
         return True
 
     @staticmethod
-    def get(id=None, keyword=None, ):
+    def get(id=None, keyword=None):
         if not id in UserKeyword_cache:
             UserKeyword_cache[id] = {}
 
@@ -194,11 +197,7 @@ class UserSettings(db.Model):
         '''
             取得設定
         '''
-        #if user_id is None:
-        #    return default
-
         row = UserSettings.__get(group_id, user_id)
-        print(row.options)
 
         return json.loads(row.options).get(option, default)
 
