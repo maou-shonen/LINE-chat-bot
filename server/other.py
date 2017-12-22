@@ -39,8 +39,6 @@ def google_search(key):
     results = soup.select('h3.r a')
     for result in results[:5]:
         link = result.get('href')
-        #link = 'https://transparencyreport.google.com/safe-browsing/search?' + urlencode({'rul':link}) 
-        #link = google_shorten_url(link)
         reply_messages.append('%s\n%s' % (result.text, link))
     
     if len(reply_messages) > 0:
@@ -79,8 +77,6 @@ def ehentai_search(key):
     results = soup.select('.it5')
     for result in results[:5]:
         link = result.find('a').get('href')
-        #link = 'https://transparencyreport.google.com/safe-browsing/search?' + urlencode({'rul':link}) 
-        #link = google_shorten_url(link)
         reply_messages.append('%s\n%s' % (result.text, link))
     
     if len(reply_messages) > 0:
@@ -98,8 +94,8 @@ client.post('https://forums.e-hentai.org/index.php?act=Login&CODE=01', data={
 	'CookieDate': '1',
 	'b': 'd',
 	'bt': '1-1',
-	'UserName':'q267009886',
-	'PassWord':'qq123456',
+	'UserName':cfg['ehentai']['帳號'],
+	'PassWord':cfg['ehentai']['密碼'],
 	'ipb_login_submit':'Login!',
 })
 
@@ -133,8 +129,6 @@ def exhentai_search(key):
     results = soup.select('.it5')
     for result in results[:5]:
         link = result.find('a').get('href')
-        #link = 'https://transparencyreport.google.com/safe-browsing/search?' + urlencode({'rul':link}) 
-        #link = google_shorten_url(link)
         reply_messages.append('%s\n%s' % (result.text, link))
     
     if len(reply_messages) > 0:

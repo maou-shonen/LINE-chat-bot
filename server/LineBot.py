@@ -1,5 +1,5 @@
 from api import cfg, is_image_and_ready
-
+import requests.exceptions
 from linebot import LineBotApi
 from linebot.exceptions import LineBotApiError
 from linebot.models import TextMessage, ImageSendMessage, TextSendMessage
@@ -40,7 +40,12 @@ class LineBot(LineBotApi):
 
         try:
             if len(message_object) > 0:
-                LineBotApi.reply_message(self, reply_token, message_object)
+                while True:
+                    try:
+                        LineBotApi.reply_message(self, reply_token, message_object)
+                        break
+                    except requests.exceptions.ReadTimeout as e:
+                        pass
         except LineBotApiError as e:
             Exception(''.join([
                 '[錯誤內容]' + message,

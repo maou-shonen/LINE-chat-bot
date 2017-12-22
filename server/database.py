@@ -10,10 +10,66 @@ app.config['SQLALCHEMY_ECHO'] = cfg['database']['debug']
 app.config['SQLALCHEMY_POOL_SIZE'] = 100
 app.config['SQLALCHEMY_POOL_TIMEOUT'] = 10
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = True
-
 db = SQLAlchemy(app)
 
 
+class NullObject:
+    def __init__(self, **argv):
+        if len(argv) > 0:
+            self.__dict__.update(argv)
+
+
+###############################################
+#   使用者狀態
+class UserStatus(db.Model):
+    id     = db.Column(db.String(35), primary_key=True)
+    use_on = db.Column(db.DateTime)
+    news   = db.Column(db.TEXT)
+
+    def __init__(self, id):
+        self.id = id
+        self.news = None
+
+    @staticmethod
+    def __get(id):
+        '''
+            取得ID
+            如果沒有新增一筆
+        '''
+        row = UserStatus.query.get(id)
+        if row is None:
+            row = UserStatus(id)
+            db.session.add(row)
+        return row
+
+    @staticmethod
+    def refresh(id):
+        '''
+            刷新最後使用時間
+        '''
+        if id is None:
+            return
+
+        row = UserStatus.__get(id)
+
+        row.use_on = datetime.now()
+
+    @staticmethod
+    def check_news(id):
+        '''
+            檢查公告版本
+        '''
+        row = UserStatus.__get(id)
+
+        if row.news != cfg['公告']['ver']:
+            row.news = cfg['公告']['ver']
+            return True
+        return False
+
+
+
+###############################################
+#   使用者狀態
 class UserKeyword(db.Model):
     _id     = db.Column(db.Integer, autoincrement=True, primary_key=True)
     id      = db.Column(db.String(35))
@@ -32,43 +88,124 @@ class UserKeyword(db.Model):
         self.level   = len(keyword) - keyword.count('**')*(len('**')+1)
 
     @staticmethod
-    def add_and_update(id, author, keyword, reply):
-        for row in UserKeyword.query.filter_by(id=id, keyword=keyword):
+    def add_and_update(id, author, keyword, reply, plus=False):
+        cache = UserKeyword.get(id, keyword)
+        if cache is None:
+            row = UserKeyword(id, author, keyword, reply)
+            db.session.add(row)
+
+            UserKeyword_cache[id][keyword] = NullObject(**row.__dict__)
+        else:
             #關鍵字保護
-            n = row.reply.rfind('##')
-            if n > -1 and '保護' in row.reply[n:] and row.author != author:
+            n = cache.reply.rfind('##')
+            if n > -1 and '保護' in cache.reply[n:] and cache.author != author:
                 raise Exception('此關鍵字已被保護\n只有原設定者可以修改')
 
-            row.author = author
-            row.reply = reply
-            break
-        else:
-            db.session.add(UserKeyword(id, author, keyword, reply))
+            cache.author = author
+            cache.reply = reply + '__' + cache.reply if plus else reply #plus模式疊加
+
+            for row in UserKeyword.query.filter_by(id=id, keyword=keyword):
+                row.author = author
+                row.reply = reply + '__' + row.reply if plus else reply #plus模式疊加
         return True
 
     @staticmethod
     def delete(id, author, keyword):
-        for row in UserKeyword.query.filter_by(id=id, keyword=keyword):
-            #關鍵字保護
-            n = row.reply.rfind('##')
-            if n > -1 and '保護' in row.reply[n:] and row.author != author:
-                raise Exception('此關鍵字已被保護\n只有原設定者可以修改')
+        cache = UserKeyword.get(id, keyword)
+        if cache is None:
+            return False
 
+        #關鍵字保護
+        n = cache.reply.rfind('##')
+        if n > -1 and '保護' in cache.reply[n:] and cache.author != author:
+            raise Exception('此關鍵字已被保護\n只有原設定者可以修改')
+        
+        for row in UserKeyword.query.filter_by(id=id, keyword=keyword):
             db.session.delete(row)
-            return True
-        return False
+        UserKeyword_cache[id].pop(keyword)
+        return True
 
     @staticmethod
-    def get(id, keyword=None):
-        if keyword is None:
-            return list(UserKeyword.query.filter_by(id=id).order_by(UserKeyword.level.desc(), UserKeyword._id.desc()))
+    def get(id=None, keyword=None, ):
+        if not id in UserKeyword_cache:
+            UserKeyword_cache[id] = {}
+
+        if id is None:
+            rows = []
+            for i in UserKeyword_cache.values():
+                for row in i.values():
+                    rows.append(row)
+            return rows
+        elif keyword is None:
+            return [row for row in UserKeyword_cache[id].values()]
         else:
-            for row in UserKeyword.query.filter_by(id=id, keyword=keyword):
-                return row
-            else:
-                return None
+            return UserKeyword_cache[id].get(keyword, None)
+
+#載入快取
+UserKeyword_cache = {}
+for row in UserKeyword.query:
+    if row.id not in UserKeyword_cache:
+        UserKeyword_cache[row.id] = {}
+    UserKeyword_cache[row.id][row.keyword] = NullObject(**row.__dict__)
 
 
+
+###############################################
+#   使用者設定
+class UserSettings(db.Model):
+    _id       = db.Column(db.Integer, autoincrement=True, primary_key=True)
+    group_id  = db.Column(db.String(35))
+    user_id   = db.Column(db.String(35))
+    options   = db.Column(db.TEXT)
+
+    def __init__(self, group_id, user_id):
+        self.group_id = group_id
+        self.user_id  = user_id
+        self.options  = '{}'
+
+    @staticmethod
+    def __get(group_id, user_id):
+        '''
+            取得ID
+            如果沒有新增一筆
+        '''
+        row = UserSettings.query.filter_by(group_id=group_id, user_id=user_id).first()
+        if row is None:
+            row = UserSettings(group_id, user_id)
+            db.session.add(row)
+        return row
+        
+    @staticmethod
+    def update(group_id, user_id, options):
+        '''
+            更新設定
+        '''
+        if type(options) != dict:
+            Exception('參數類型錯誤')
+
+        row = UserSettings.__get(group_id, user_id)
+
+        row_options = json.loads(row.options)
+        row_options.update(options)
+        row.options = json.dumps(row_options)
+
+    @staticmethod
+    def get(group_id, user_id, option, default=None):
+        '''
+            取得設定
+        '''
+        #if user_id is None:
+        #    return default
+
+        row = UserSettings.__get(group_id, user_id)
+        print(row.options)
+
+        return json.loads(row.options).get(option, default)
+
+
+
+###############################################
+#   使用狀況計數器
 class MessageLogs(db.Model):
     _id        = db.Column(db.Integer, autoincrement=True, primary_key=True)
     group_id   = db.Column(db.String(35))
@@ -125,60 +262,6 @@ class MessageLogs(db.Model):
         return data
 
 
-
-class UserSettings(db.Model):
-    id = db.Column(db.String(35), primary_key=True)
-    last_time = db.Column(db.DateTime)
-    news = db.Column(db.TEXT)
-    options = db.Column(db.TEXT)
-
-    def __init__(self, id):
-        self.id = id
-        self.news = None
-        self.options = '{}'
-
-    @staticmethod
-    def __get(id):
-        data = UserSettings.query.get(id)
-        if data is None:
-            data = UserSettings(id)
-            db.session.add(data)
-        return data
-        
-        '''
-        for row in UserSettings.query.filter_by(id=id):
-            return row
-        else:
-            data = UserSettings(id)
-            db.session.add(data)
-            return data
-        '''
-    
-    @staticmethod
-    def refresh_last_time(id):
-        data = UserSettings.__get(id)
-        data.last_time = datetime.now()
-
-    @staticmethod
-    def check_news(id):
-        data = UserSettings.__get(id)
-        if data.news != cfg['公告']['ver']:
-            data.news = cfg['公告']['ver']
-            return True
-        return False
-
-    @staticmethod
-    def update(id, **options):
-        data = UserSettings.__get(id)
-        data_options = json.loads(data.options)
-        for opt, val in options.items():
-            data_options[opt] = val
-        data.options = json.dumps(data_options)
-
-    @staticmethod
-    def get(id, option, default=None):
-        data = UserSettings.__get(id)
-        return json.loads(data.options).get(option, default)
 
 
 ###################################

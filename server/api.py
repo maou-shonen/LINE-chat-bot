@@ -2,7 +2,8 @@ import yaml
 import requests
 
 
-cfg = yaml.load(open('config.yaml', 'r', encoding='utf-8-sig'))
+cfg  = yaml.load(open('config.yaml', 'r', encoding='utf-8-sig'))
+text = yaml.load(open('text.yaml', 'r', encoding='utf-8-sig'))
 
 
 class Cache(dict):
@@ -53,8 +54,11 @@ def isFloat(s):
 is_image_and_ready_cache = {}
 def is_image_and_ready(url):
     try:
-        ct = is_image_and_ready_cache.get(url, requests.head(url, timeout=5).headers.get('content-type'))
-        is_image_and_ready_cache[url] = ct
+        if url in is_image_and_ready_cache:
+            ct = is_image_and_ready_cache[url]
+        else:
+            ct = requests.head(url, timeout=5).headers.get('content-type')
+            is_image_and_ready_cache[url] = ct
         return ct in ['image/jpeg', 'image/png']
     except:
         return False
