@@ -18,6 +18,7 @@ class LineBot(LineBotApi):
     def reply_message(self, reply_token, messages):
         if messages is None:
             return
+        print(messages)
 
         if type(messages) == str:
             messages = [messages]

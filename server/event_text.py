@@ -298,14 +298,16 @@ class EventText():
             return text['設定無個人提醒']
 
         if self.key is None:
-            return (
+            return [
                     '設定=別理我=開/關\n'
                     '設定=全回應=開/關\n'
                     '設定=全圖片=開/關(需要全回應)\n'
                     '設定=髒話過濾=開/關\n'
                     '\n'
-                    '(不輸入值可查看說明)'
-                )
+                    '(不輸入值可查看說明)',
+                    
+                    UserSettings.show(self.group_id, self.user_id)
+                ]
         
         try:
             #全群組

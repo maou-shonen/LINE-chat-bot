@@ -201,6 +201,36 @@ class UserSettings(db.Model):
 
         return json.loads(row.options).get(option, default)
 
+    @staticmethod
+    def show(group_id, user_id):
+        '''
+            取得設定
+        '''
+        def bool2str(b):
+            return '開啟' if b else '關閉'
+
+        data = ['目前的設定']
+
+        row = UserSettings.__get(group_id, user_id)
+        data.append('<群組>')
+        settings = json.loads(row.options)
+        if len(settings) > 0:
+            for k, v in settings.items():
+                data.append('%s = %s' % (k, bool2str(v)))
+        else:
+            data.append('無 (預設)')
+
+        row = UserSettings.__get(group_id, None)
+        data.append('<群組中的你>')
+        settings = json.loads(row.options)
+        if len(settings) > 0:
+            for k, v in settings.items():
+                data.append('%s = %s' % (k, bool2str(v)))
+        else:
+            data.append('無 (預設)')
+
+        return '\n'.join(data)
+
 
 
 ###############################################
