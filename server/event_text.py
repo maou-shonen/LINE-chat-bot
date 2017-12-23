@@ -73,9 +73,9 @@ class EventText():
 
     def index(self):
         if   self.order in ['-?', '-h', 'help', '說明', '指令', '命令']:
-            return cfg.get('指令說明')
+            return text['指令說明']
         elif self.order in ['公告']:
-            return None
+            return cfg['公告']['內容']
         elif self.order in ['愛醬安靜', '愛醬閉嘴', '愛醬壞壞', '愛醬睡覺']:
             return self.sleep()
         elif self.order in ['愛醬講話', '愛醬說話', '愛醬聊天', '愛醬乖乖', '愛醬起床', '愛醬起來']:
@@ -153,7 +153,7 @@ class EventText():
                     + '\n\n【列表=我】查詢自己'
 
 
-    def add(self, plus=False):
+    def add(self, plus=None):
         '''
             新增關鍵字
         '''
@@ -182,7 +182,7 @@ class EventText():
                 if data is not None:
                     reply_message.append('個人=%s' % data.reply)
 
-            return '\n'.join(reply_message) if len(reply_message) > 1 else '%s<%s>' % (text['關鍵字查詢不到'], key)
+            return '\n'.join(reply_message) if len(reply_message) > 1 else '%s<%s>' % (text['關鍵字查詢不到'], self.key)
 
         #新增
         ban_key = ['**', '愛醬**', '**愛醬**']
@@ -194,6 +194,9 @@ class EventText():
         
         if self.key == '':
             return text['學習說明']
+
+        if plus is None: #如果1對1 預設使用plus
+            plus = self.group_id is None
 
         #保護模式過濾 之後option寫入database將此邏輯合併計算中
         n = self.value.rfind('##')
@@ -305,7 +308,7 @@ class EventText():
                     '設定=髒話過濾=開/關\n'
                     '\n'
                     '(不輸入值可查看說明)',
-                    
+
                     UserSettings.show(self.group_id, self.user_id)
                 ]
         
@@ -688,7 +691,7 @@ class EventText():
             if count <  1: count = 1
             if count == 1 and '種子' in opt and opt['種子'].isdigit() and int(opt['種子']) > 0:
                 seed_time = int((datetime.now()-datetime(2017,1,1)).days * 24 / int(opt['種子']))
-                seed = int(md5((str(user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
+                seed = int(md5((str(self.user_id) + str(seed_time)).encode()).hexdigest().encode(), 16) % weight_total
             else:
                 try:
                     #random.org的隨機據說為真隨機
