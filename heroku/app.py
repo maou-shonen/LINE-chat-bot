@@ -92,7 +92,7 @@ def handle_image(event):
             for i in range(100):
                 try:
                     image = imgur.upload_from_path(path)
-                    msg = '愛醬幫你上傳圖片了喔\n%s' % (image['link'])
+                    msg = image['link']
                     break
                 except Exception as e:
                     msg = '愛醬上傳圖片錯誤了...\n%s' % str(e)

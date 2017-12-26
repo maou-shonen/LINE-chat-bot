@@ -21,10 +21,13 @@ def google_shorten_url(url):
 
 google_search_time = 0
 def google_search(key):
-    headers = {'User-Agent':cfg['user_agent']}
+    headers = {'user-agent':cfg['user_agent']}
     url = 'https://www.google.com.tw/search?' + urlencode({
         'q':key,
         'safe':'off',
+        'aqs':'chrome.0.69i59j0l5.369j0j4',
+        'sourceid':'chrome',
+        'ie':'UTF-8',
     })
     global google_search_time
     while time() - google_search_time < 1:
@@ -33,6 +36,7 @@ def google_search(key):
 
     r = requests.get(url, headers=headers)
     if not r.ok:
+        print(r.text)
         return '愛醬搜尋失敗了！'
     reply_messages = []
     soup = BeautifulSoup(r.text, 'lxml')

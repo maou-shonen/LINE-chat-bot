@@ -211,7 +211,7 @@ class UserSettings(db.Model):
 
         data = ['目前的設定']
 
-        row = UserSettings.__get(group_id, user_id)
+        row = UserSettings.__get(group_id, None)
         data.append('<群組>')
         settings = json.loads(row.options)
         if len(settings) > 0:
@@ -220,7 +220,7 @@ class UserSettings(db.Model):
         else:
             data.append('無 (預設)')
 
-        row = UserSettings.__get(group_id, None)
+        row = UserSettings.__get(group_id, user_id)
         data.append('<群組中的你>')
         settings = json.loads(row.options)
         if len(settings) > 0:

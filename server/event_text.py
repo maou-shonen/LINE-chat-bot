@@ -11,14 +11,12 @@ from api import (
     isValueHaveKeys, is_image_and_ready, str2bool, isFloat,
 )
 from database import db, UserStatus, UserKeyword, UserSettings, MessageLogs
-from other import google_shorten_url, google_search, ehentai_search, exhentai_search
+from other import google_shorten_url, ehentai_search, exhentai_search, google_search
 from LineBot import bots
+from module import google_safe_browsing
 
-
-#未整理參考
-from google_safe_browsing import google_safe_browsing
+#未整理
 MessageLogs_texts = yaml.load(open('logs.yaml', 'r', encoding='utf-8-sig'))
-
 UserSettings_temp = ConfigFile('.UserSettings_temp.tmp')
 
 
@@ -72,10 +70,12 @@ class EventText():
 
 
     def index(self):
-        if   self.order in ['-?', '-h', 'help', '說明', '指令', '命令']:
+        if   self.order in ['聖誕快樂', '聖誕節快樂']:
+            return self.especially()
+        elif self.order in ['-?', '-h', 'help', '說明', '指令', '命令']:
             return text['指令說明']
         elif self.order in ['公告']:
-            return cfg['公告']['內容']
+            return self.push()
         elif self.order in ['愛醬安靜', '愛醬閉嘴', '愛醬壞壞', '愛醬睡覺']:
             return self.sleep()
         elif self.order in ['愛醬講話', '愛醬說話', '愛醬聊天', '愛醬乖乖', '愛醬起床', '愛醬起來']:
@@ -108,6 +108,19 @@ class EventText():
             return self.exhentai()
         else:
             return self.main()
+
+    def especially(self):
+        return '愛醬也祝大家聖誕快樂喔！'
+
+
+    def push(self):
+        if self.user_id != cfg['admin_line']:
+            return cfg['公告']['內容']
+        if self.value is None:
+            return '參數錯誤\n[公告=對象=內容]'
+        UserSettings_temp.set(self.key, '臨時公告', self.value)
+        UserSettings_temp.save()
+        return 'ok'
 
 
     def sleep(self):
@@ -150,10 +163,10 @@ class EventText():
                 return '、'.join([k.keyword for k in UserKeyword.get(self.user_id)])
         else:
             return '、'.join([k.keyword for k in UserKeyword.get(self.group_id)]) \
-                    + '\n\n【列表=我】查詢自己'
+                    + '\n\n【列表=我】查詢自己\n現在群組中預設是不使用個人詞庫的喔\n有需要請用【設定】開啟'
 
 
-    def add(self, plus=None):
+    def add(self, plus=False):
         '''
             新增關鍵字
         '''
@@ -185,7 +198,7 @@ class EventText():
             return '\n'.join(reply_message) if len(reply_message) > 1 else '%s<%s>' % (text['關鍵字查詢不到'], self.key)
 
         #新增
-        ban_key = ['**', '愛醬**', '**愛醬**']
+        ban_key = ['**', '** **', '愛醬**', '**愛醬**']
         if self.key in ban_key:
             return '%s\n%s' % (text['關鍵字禁用'], text['分隔符'].join(ban_key))
 
@@ -195,12 +208,9 @@ class EventText():
         if self.key == '':
             return text['學習說明']
 
-        if plus is None: #如果1對1 預設使用plus
-            plus = self.group_id is None
-
         #保護模式過濾 之後option寫入database將此邏輯合併計算中
         n = self.value.rfind('##')
-        if n > -1 and '保護' in self.value[n:] and key[:2] == '**' and key[-2:] == '**':
+        if n > -1 and '保護' in self.value[n:] and self.key[:2] == '**' and self.key[-2:] == '**':
             return '為了避免過度觸發\n保護模式關鍵字不接受前後**喔'
 
         reply_message = ['<%s>記住了喔 ' % self.key]
@@ -225,16 +235,24 @@ class EventText():
         elif level >= 7:
             reply_message.append('\n這種詞命中率較低喔 請善加利用萬用字元雙米號')
 
+        if '*' in self.key and '**' not in self.key:
+            reply_message.append('\n愛醬發現你似乎要使用萬用字元?\n如果是的話請把 *(單米號) 換成 **(雙米號)')
+        if '_' in self.value and self.value.count('__') == 0:
+            reply_message.append('\n愛醬發現你似乎要使用隨機模式?\n如果是的話請把 _(單底線) 換成 __(雙底線)')
+
         for i in self.value.replace('__', '||').split('||'):
             i = i.strip()
             if i[:4] == 'http' and not is_image_and_ready(i):
                 reply_message.append('<%s>\n愛醬發現圖片網址是錯誤的\n請使用格式(jpg, png)\n短網址或網頁嵌圖片可能無效\n必須使用https' % i)
             break #如果全部都檢查時間會太久 只幫第一個檢查格式 通常使用者圖床也會使用同一個 應該不會有問題
-
-        #保護模式提醒 之後option寫入database將此邏輯合併計算中
-        n = self.value.rfind('##')
-        if n > -1 and '保護' in self.value[n:]:
-            reply_message.append('\n(此為保護關鍵字 只有你可以刪除及修改 為了避免爭議 建議不要濫用)')
+    
+        if self.group_id is None:
+            reply_message.append('\n現在個人詞庫預設是不會在群組觸發的喔\n請在群組設定開啟全回應模式(預設開)或開啟個人詞庫(預設關)')
+        else:
+            #保護模式提醒 之後option寫入database將此邏輯合併計算中
+            n = self.value.rfind('##')
+            if n > -1 and '保護' in self.value[n:]:
+                reply_message.append('\n(此為保護關鍵字 只有你可以刪除及修改 為了避免爭議 建議不要濫用)')
             
         return ''.join(reply_message)
 
@@ -484,7 +502,7 @@ class EventText():
         '''
             關鍵字觸發
         '''
-        if 'http:' in self.message or 'https:' in self.message: #如果內容含有網址 做網址檢查
+        if self.group_id is not None and 'http:' in self.message or 'https:' in self.message: #如果內容含有網址 做網址檢查
             MessageLogs.add(self.group_id, self.user_id, nUrl=1) #紀錄次數
             return google_safe_browsing(self.message)
 
@@ -510,16 +528,17 @@ class EventText():
                 UserSettings_temp.remove_option(self.group_id, '暫停')
                 UserSettings_temp.save()
                 return text['睡醒']
-        elif self.group_id is not None: #一般模式
-            if not UserSettings.get(self.group_id, self.user_id, '別理我', False): #檢查不理我模式
+        #一般模式
+        else:
+            if self.group_id is not None and not UserSettings.get(self.group_id, self.user_id, '別理我', False): #檢查不理我模式
                 reply_message = self.check(UserKeyword.get(self.group_id))
                 if reply_message is not None:
                     return reply_message
 
-                if UserSettings.get(self.group_id, self.user_id, '個人詞庫', False): #檢查是否使用個人詞庫
-                    reply_message = self.check(UserKeyword.get(self.user_id))
-                    if reply_message is not None:
-                        return reply_message
+            if self.group_id is None or UserSettings.get(self.group_id, self.user_id, '個人詞庫', False): #檢查是否使用個人詞庫
+                reply_message = self.check(UserKeyword.get(self.user_id))
+                if reply_message is not None:
+                    return reply_message
 
         #全回應模式
         if self.group_id is None or UserSettings.get(self.group_id, None, '全回應', default=True):
@@ -561,7 +580,7 @@ class EventText():
             if self.message[:4] == 'http':
                 return '愛醬幫你申請短網址了喵\n%s' % google_shorten_url(message)
             else:
-                return '群組指令說明輸入【指令】\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n<1:1自動開啟全回應模式>\n<此功能測試中 字庫還不多>\n<如果開啟全圖片模式有更多回應>\n其他功能如果有建議請使用回報'
+                return '群組指令說明輸入【指令】\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n<1:1自動開啟全回應與全圖片模式>\n其他功能如果有建議請使用回報'
         else:
             return None
 
@@ -627,9 +646,9 @@ class EventText():
             #reply_message = ''.join(reply_message_new)
             reply_message = reply_message[:reply_message.find('##')] #參數之後會由add儲存至database 這邊之後會廢棄
 
-        filter_fuck = UserSettings.get(self.group_id, None, '髒話過濾', True)
+        filter_fuck = self.group_id is not None and UserSettings.get(self.group_id, None, '髒話過濾', True)
         if filter_fuck and isValueHaveKeys(self.message, cfg['詞組']['髒話']):
-            return '愛醬覺得說髒話是不對的!!\n如有需要請使用【設定=髒話過濾=關】關閉'
+            return '愛醬是好孩子不說髒話!!\n(可用【設定】關閉)'
 
         #隨機 (算法:比重)
         if '__' in reply_message:

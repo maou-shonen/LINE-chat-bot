@@ -18,6 +18,7 @@ def event_text():
     except Exception as e:
         bots[request.json['bot_id']].reply_message(request.json['reply_token'], '愛醬出錯了！\n作者可能會察看此錯誤報告')
 
+        '''
         e_type, e_value, e_traceback = sys.exc_info()
         bots['admin'].send_message(cfg['admin_line'], '<愛醬BUG>\ntype:%s\nvalue:%s\nfile:%s\nfunc:%s\nline:%s' % (
             str(e_type),
@@ -26,6 +27,8 @@ def event_text():
             str(e_traceback.tb_frame.f_code.co_name),
             str(e_traceback.tb_lineno),
         ))
+        '''
+        bots['admin'].send_message(cfg['admin_line'], '<愛醬BUG>%s' % str(e))
         raise e
         abort(400)
 

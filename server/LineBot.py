@@ -34,8 +34,8 @@ class LineBot(LineBotApi):
                 else:
                     message_object.append(TextSendMessage(message))
             else:
-                if len(message) > 2048:
-                    message = message[:2048]
+                if len(message) > 2000:
+                    message = message[:2000]
                 message_object.append(TextSendMessage(message))
 
         try:
