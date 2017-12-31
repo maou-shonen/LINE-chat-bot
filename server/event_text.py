@@ -1,3 +1,4 @@
+import json
 import yaml
 import requests
 from time import time
@@ -18,68 +19,135 @@ from module import google_safe_browsing
 #未整理
 MessageLogs_texts = yaml.load(open('logs.yaml', 'r', encoding='utf-8-sig'))
 UserSettings_temp = ConfigFile('.UserSettings_temp.tmp')
+from database import User, Group
 
 
 class EventText():
     def __init__(self, **argv):
         self.__dict__.update(**argv)
-        self.message = self.message.replace('"', '＂').replace("'", '’').replace(';', '；') #替換一些字元成全型 防SQL注入攻擊
-        self.order, *self.value = self.message.split('=')
-        self.order = self.order.lower()
-        self.key = self.value[0].strip(' \n') if len(self.value) > 0 else None
-        self.value = '='.join(self.value[1:]).strip(' \n') if len(self.value) > 1 else None
+
+        self.is_unknown_user = self.user_id is None
+        self.in_group = self.group_id is not None
+
+        #User 模組
+        self.user = User.query.get(self.user_id) if not self.is_unknown_user else None
+        if not self.is_unknown_user:
+            if self.user is None:
+                self.user = User(self.user_id)
+                db.session.add(self.user)
+
+        #Group 模組
+        self.group = Group.query.get(self.group_id) if self.in_group else None
+        if self.in_group:
+            if self.group is None:
+                self.group = Group(self.group_id)
+                db.session.add(self.group)
+            self.group._json() #mariaDB還沒有支援json格式 只好自行轉換
+
+        #文本分類
+        if self.message is not None:
+            self.message = self.message.replace('"', '＂').replace("'", '’').replace(';', '；') #替換一些字元成全型 防SQL注入攻擊
+            self.order, *self.value = self.message.split('=')
+            self.order = self.order.lower()
+            self.key = self.value[0].strip(' \n') if len(self.value) > 0 else None
+            self.value = '='.join(self.value[1:]).strip(' \n') if len(self.value) > 1 else None
+
+
+    def _count(self, values):
+        '''
+            使用者計數
+        '''
+        if not self.in_group:
+            return
+
+        user_id = self.user.id if not self.is_unknown_user else 'None'
+        if user_id not in self.group.count:
+            self.group.count[user_id] = {}.fromkeys(['調教', '觸發', '對話', '貼圖', '圖片', '網頁', '髒話', '字數'], 0)
+
+        for key, value in values.items():
+            self.group.count[user_id][key] += value
 
 
     def run(self):
-        print('%s@%s' % (None if self.user_id is None else self.user_id[1:5], self.group_id), '>', self.message)
+        '''
+            接收發送訊息邏輯
+        '''
+        if self.message is not None:
+            print('%s@%s' % (None if self.user_id is None else self.user_id[1:5], self.group_id), '>', self.message)
 
-        t0 = time()
-        reply_message = self.index()
-        t1 = time() - t0
+            t0 = time()
+            reply_message = self.index()
+            t1 = time() - t0
 
-        #公告
-        if reply_message is None:
+            #公告
+            if reply_message is None:
+                reply_message = []
+            elif type(reply_message) == str:
+                reply_message = [reply_message]
+                    
+            if UserStatus.check_news(self.group_id):
+                reply_message.append(''.join([cfg['公告']['ver'], ' ', cfg['公告']['內容']]))
+
+            for mid in [self.user_id, self.group_id]:
+                if mid is not None and UserSettings_temp.has_option(mid, '臨時公告'):
+                    try:
+                        user_name = bots[self.bot_id].get_group_member_profile(self.group_id, self.user_id).display_name if mid != self.group_id else ''
+                    except:
+                        user_name = ''
+                    reply_message.append('<作者回覆%s>\n%s' % (user_name, UserSettings_temp.get(mid, '臨時公告')))
+                    UserSettings_temp.remove_option(mid, '臨時公告')
+                    UserSettings_temp.save()
+
+            if len(reply_message) > 0:
+                if self.bot_id is not None:
+                    bots[self.bot_id].reply_message(self.reply_token, reply_message)
+                t2 = time() - t1 - t0
+                print('%s@%s' % (None if self.user_id is None else self.user_id[1:5], self.group_id), '<', reply_message, '(%dms, %dms)' % (t1*1000, t2*1000))
+        elif self.sticker is not None:
             reply_message = []
-        elif type(reply_message) == str:
-            reply_message = [reply_message]
-                
-        if UserStatus.check_news(self.group_id):
-            reply_message.append(''.join([cfg['公告']['ver'], ' ', cfg['公告']['內容']]))
-
-        for mid in [self.user_id, self.group_id]:
-            if mid is not None and UserSettings_temp.has_option(mid, '臨時公告'):
-                try:
-                    user_name = bots[self.bot_id].get_group_member_profile(self.group_id, self.user_id).display_name if mid != self.group_id else ''
-                except:
-                    user_name = ''
-                reply_message.append('<作者回覆%s>\n%s' % (user_name, UserSettings_temp.get(mid, '臨時公告')))
-                UserSettings_temp.remove_option(mid, '臨時公告')
-                UserSettings_temp.save()
-
-        if len(reply_message) > 0:
-            bots[self.bot_id].reply_message(self.reply_token, reply_message)
-            t2 = time() - t1 - t0
-            print('%s@%s' % (None if self.user_id is None else self.user_id[1:5], self.group_id), '<', reply_message, '(%dms, %dms)' % (t1*1000, t2*1000))
+            self._count({'貼圖':1})
+        elif self.image is not None:
+            reply_message = []
+            self._count({'圖片':1})
 
         #刷新時間
-        UserStatus.refresh(self.group_id)
-        UserStatus.refresh(self.user_id)
+        #UserStatus.refresh(self.group_id)
+        #UserStatus.refresh(self.user_id)
+        
+        if not self.is_unknown_user:
+            try:
+                self.user.name = bots[self.bot_id].get_group_member_profile(self.group.id, self.user.id).display_name
+            except:
+                pass
+            self.user.update()
+        if self.in_group:
+            self.group.update()
         
         db.session.commit()
         return reply_message
 
 
     def index(self):
-        if   self.order in ['聖誕快樂', '聖誕節快樂']:
-            return self.especially()
-        elif self.order in ['-?', '-h', 'help', '說明', '指令', '命令']:
+        if self.in_group:
+            #群組才有的功能
+            if   self.order in ['-s', 'set', 'settings', '設定', '設置']:
+                return self.settings()
+            elif self.order in ['愛醬安靜', '愛醬閉嘴', '愛醬壞壞', '愛醬睡覺']:
+                return self.sleep()
+            elif self.order in ['愛醬講話', '愛醬說話', '愛醬聊天', '愛醬乖乖', '愛醬起床', '愛醬起來']:
+                return self.wake_up()
+            elif self.order in ['log', 'logs', '紀錄', '回憶']:
+                return self.logs()
+        else:
+            #1對1才有的功能
+            pass
+
+        if self.order in ['-?', '-h', 'help', '說明', '指令', '命令']:
             return text['指令說明']
         elif self.order in ['公告']:
             return self.push()
-        elif self.order in ['愛醬安靜', '愛醬閉嘴', '愛醬壞壞', '愛醬睡覺']:
-            return self.sleep()
-        elif self.order in ['愛醬講話', '愛醬說話', '愛醬聊天', '愛醬乖乖', '愛醬起床', '愛醬起來']:
-            return self.wake_up()
+        elif self.order in ['-w', 'web', '網頁設定', '網頁設置']:
+            return self.web()
         elif self.order in ['-l', 'list', '列表']:
             return self.list()
         elif self.order in ['-a', 'add', 'keyword', '新增', '關鍵字', '學習']:
@@ -90,17 +158,13 @@ class EventText():
             return self.delete()
         elif self.order in ['-o', 'opinion', '意見', '建議', '回報', '檢舉']:
             return self.opinion()
-        elif self.order in ['-s', 'set', 'settings', '設定', '設置']:
-            return self.settings()
-        elif self.order in ['log', 'logs', '紀錄', '回憶']:
-            return self.logs()
         elif self.order in ['google', 'goo']:
             return self.google()
         elif self.order in ['短網址']:
             return self.google_url_shortener()
         elif self.order in ['飆車']:
             return self.bt()
-        elif self.order in ['停車', '煞車']:
+        elif self.order in ['停車']:
             return self.bt_stop()
         elif self.order in ['e-hentai', 'ehentai', 'e變態']:
             return self.ehentai()
@@ -108,9 +172,6 @@ class EventText():
             return self.exhentai()
         else:
             return self.main()
-
-    def especially(self):
-        return '愛醬也祝大家聖誕快樂喔！'
 
 
     def push(self):
@@ -127,8 +188,6 @@ class EventText():
         '''
             愛醬睡覺
         '''
-        if self.group_id is None:
-            return '...'
         h = 12 if self.key is None or not self.key.isdigit() else int(self.key)
         t = time() + 60 * 60 * (24*7 if h > 24*7 else 1 if h < 1 else h)
         UserSettings_temp.set(self.group_id, '暫停', str(t))
@@ -140,8 +199,6 @@ class EventText():
         '''
             愛醬起床
         '''
-        if self.group_id is None:
-            return '...'
         if UserSettings_temp.has_option(self.group_id, '暫停'):
             UserSettings_temp.remove_option(self.group_id, '暫停')
             UserSettings_temp.save()
@@ -150,47 +207,68 @@ class EventText():
             return text['沒睡']
 
 
+    def web(self):
+        '''
+            網頁設定
+        '''
+        if self.is_unknown_user:
+            return text['權限不足']
+
+        reply_message = []
+        reply_message.append('<個人>\nmaou.co:1234/u')
+        if self.in_group:
+            r = requests.post('http://127.0.0.1:1234/authorized', json={ #授權user可以操作本群組
+                'user_id':self.user.id,
+                'group_id':self.group.id,
+            })
+            reply_message.append('<群組>\nmaou.co:1234/g/%s\n(30分鐘內有效)' % self.group.id)
+        reply_message.append('如果有會前端JS的人願意幫忙修改\n請用「回報」功能聯絡我')
+
+        return '\n\n'.join(reply_message)
+
+
     def list(self):
         '''
             列出關鍵字
         '''
-        MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
-
-        if self.group_id is None or self.key in cfg['詞組']['自己的']:
-            if self.user_id is None:
+        if not self.in_group or self.key in cfg['詞組']['自己的']:
+            if self.is_unknown_user:
                 return text['權限不足']
             else:
-                return '、'.join([k.keyword for k in UserKeyword.get(self.user_id)])
+                return '、'.join([k.keyword for k in UserKeyword.get(self.user_id)]) \
+                    + '\n\n新功能實驗\n「網頁設定」'
         else:
             return '、'.join([k.keyword for k in UserKeyword.get(self.group_id)]) \
-                    + '\n\n【列表=我】查詢自己\n現在群組中預設是不使用個人詞庫的喔\n有需要請用【設定】開啟'
+                    + '\n\n「列表=我」查詢自己\n現在群組中預設不使用個人詞庫\n有需要請用「設定」開啟' \
+                    + '\n\n新功能實驗\n「網頁設定」'
 
 
     def add(self, plus=False):
         '''
             新增關鍵字
         '''
-        MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
-
         if self.key is None:
             return text['學習說明']
+
+        self._count({'調教':1}) #紀錄次數
+        #MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
 
         #文字處理
         self.key = self.key.lower()
         while '***' in self.key: self.key = self.key.replace('***', '**')
-        while '|||' in self.key: self.key = self.key.replace('|||', '||')
-        while '___' in self.key: self.key = self.key.replace('___', '__')
+        #while '|||' in self.value: self.value = self.key.replace('|||', '||')
+        #while '___' in self.value: self.value = self.key.replace('___', '__')
 
         #查詢
         if self.value is None or self.value == '':
             reply_message = ['<%s>' % self.key]
 
-            if self.group_id is not None:
+            if self.in_group:
                 data = UserKeyword.get(self.group_id, self.key)
                 if data is not None:
                     reply_message.append('群組=%s' % data.reply)
             
-            if self.user_id is not None:
+            if not self.is_unknown_user:
                 data = UserKeyword.get(self.user_id, self.key)
                 if data is not None:
                     reply_message.append('個人=%s' % data.reply)
@@ -205,9 +283,6 @@ class EventText():
         if self.key != text['名稱'] and self.key[:2] == text['名稱']:
             self.key = self.key[2:].strip(' \n')
         
-        if self.key == '':
-            return text['學習說明']
-
         #保護模式過濾 之後option寫入database將此邏輯合併計算中
         n = self.value.rfind('##')
         if n > -1 and '保護' in self.value[n:] and self.key[:2] == '**' and self.key[-2:] == '**':
@@ -216,16 +291,18 @@ class EventText():
         reply_message = ['<%s>記住了喔 ' % self.key]
 
         try:
-            if self.group_id is not None and UserKeyword.add_and_update(self.group_id, self.user_id, self.key, self.value, plus=plus):
+            if self.in_group:
+                UserKeyword.add_and_update(self.group_id, self.user_id, self.key, self.value, plus=plus)
                 reply_message.append('(群組)')
 
-            if self.user_id is not None and UserKeyword.add_and_update(self.user_id, self.user_id, self.key, self.value, plus=plus):
-                reply_message.append('(個人)')
-            else:
+            if self.is_unknown_user:
                 reply_message.append('(不儲存個人)\n' + text['權限不足'])
+            else:
+                UserKeyword.add_and_update(self.user_id, self.user_id, self.key, self.value, plus=plus)
+                reply_message.append('(個人)')
+                
         except Exception as e:
-            return '學習失敗: %s' + str(e)
-            raise e
+            return '學習失敗: ' % str(e)
 
         level = len(self.key) - self.key.count('**')*(len('**')+1)  #database的UserKeyword.level 懶得改上面
         if level < 0:
@@ -254,7 +331,8 @@ class EventText():
             if n > -1 and '保護' in self.value[n:]:
                 reply_message.append('\n(此為保護關鍵字 只有你可以刪除及修改 為了避免爭議 建議不要濫用)')
             
-        return ''.join(reply_message)
+        return ''.join(reply_message) \
+            + '\n\n新功能實驗\n「網頁設定」'
 
 
     def add_plus(self):
@@ -271,37 +349,42 @@ class EventText():
         '''
             刪除關鍵字
         '''
-        MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
-
         if self.key is None:
             return '格式:\n刪除=<關鍵字>'
+
+        self._count({'調教':1}) #紀錄次數
+        #MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
 
         if self.key != text['名稱'] and self.key[:2] == text['名稱']:
             self.key = self.key[2:].strip(' \n')
 
+        self.key = self.key.lower()
         reply_message = ['<%s>刪除了喔 ' % (self.key)]
 
         try:
-            if self.group_id is not None and UserKeyword.delete(self.group_id, self.user_id, self.key):
+            if self.in_group and UserKeyword.delete(self.group_id, self.user_id, self.key):
                 reply_message.append('(群組)')
 
-            if self.user_id is not None and UserKeyword.delete(self.user_id, self.user_id, self.key):
+            if not self.is_unknown_user and UserKeyword.delete(self.user_id, self.user_id, self.key):
                 reply_message.append('(個人)')
         except Exception as e:
-            return '刪除失敗: %s' + str(e)
-            raise e
+            return '刪除失敗: ' % str(e)
             
-        return ''.join(reply_message) if len(reply_message) > 1 else '喵喵喵? 愛醬不記得<%s>' % (self.key)
+        return ''.join(reply_message) if len(reply_message) > 1 else '喵喵喵? 愛醬不記得<%s>' % (self.key) \
+            + '\n\n新功能實驗\n「網頁設定」'
 
 
     def opinion(self):
         '''
             回報、建議、檢舉
         '''
-        MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
-
         if self.key is None:
             return text['回報說明']
+
+        self._count({'觸發':1}) #紀錄次數
+        #MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
+
+        
         try:
             bots['admin'].send_message(cfg['admin_line'], '%s\n%s\n%s\n%s' % (self.bot_id, self.group_id, self.user_id, self.message))
             return text['回報完成']
@@ -313,47 +396,51 @@ class EventText():
         '''
             設定
         '''
-        MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
-
-        if self.group_id is None:
-            return text['設定無個人提醒']
-
         if self.key is None:
             return [
                     '設定=別理我=開/關\n'
                     '設定=全回應=開/關\n'
                     '設定=全圖片=開/關(需要全回應)\n'
                     '設定=髒話過濾=開/關\n'
+                    '設定=幫忙愛醬=開/關\n'
                     '\n'
                     '(不輸入值可查看說明)',
 
                     UserSettings.show(self.group_id, self.user_id)
                 ]
+
+        #self._count({'觸發':1}) #紀錄次數
         
         try:
             #全群組
             if self.key == '全回應' or self.key == '愛醬全回應':
                 if self.value is None:
-                    return '開啟後愛醬開頭的對話將從全部的詞庫中產生反應\n【預設:開】'
+                    return '開啟後愛醬開頭的對話將從全部的詞庫中產生反應\n「預設:開」'
                 UserSettings.update(self.group_id, None, {'全回應':str2bool(self.value)})
                 return '設定完成'
             
             if self.key == '全圖片' or self.key == '愛醬全圖片':
                 if self.value is None:
-                    return '開啟後全回應的結果包含圖片\n(需要開啟全圖片)\n(注意:圖片沒有任何審核 有可能出現不適圖片 如可接受再開啟)\n【預設:關】'
+                    return '開啟後全回應的結果包含圖片\n(需要開啟全圖片)\n(注意:圖片沒有任何審核 有可能出現不適圖片 如可接受再開啟)\n「預設:關」'
                 UserSettings.update(self.group_id, None, {'全圖片':str2bool(self.value)})
                 return '設定完成'
 
             if self.key == '髒話過濾':
                 if self.value is None:
-                    return '關閉後回應如果有某些詞可以顯示\n【預設:開】'
+                    return '關閉後回應如果有某些詞可以顯示\n「預設:開」'
                 UserSettings.update(self.group_id, None, {'髒話過濾':str2bool(self.value)})
+                return '設定完成'
+
+            if self.key == '幫忙愛醬':
+                if self.value is None:
+                    return '開啟後會快取群組的對話紀錄\n只用於機器學習\n作者會稍微過目後進行分類丟入程式\n用完後刪除「預設:關」'
+                UserSettings.update(self.group_id, None, {'幫忙愛醬':str2bool(self.value)})
                 return '設定完成'
 
             #群組中個人
             if self.key == '別理我':
                 if self.value is None:
-                    return '開啟後愛醬不會在此群組對你產生回應\n(愛醬開頭還是可以強制呼叫)\n【預設:關】'
+                    return '開啟後愛醬不會在此群組對你產生回應\n(愛醬開頭還是可以強制呼叫)\n「預設:關」'
                 if self.user_id is None:
                     return text['權限不足']
                 UserSettings.update(self.group_id, self.user_id, {'別理我':str2bool(self.value)})
@@ -361,7 +448,7 @@ class EventText():
 
             if self.key == '個人詞庫':
                 if self.value is None:
-                    return '開啟後會對你的個人詞庫產生回應\n【預設:關】'
+                    return '開啟後會對你的個人詞庫產生回應\n「預設:關」'
                 if self.user_id is None:
                     return text['權限不足']
                 UserSettings.update(self.group_id, self.user_id, {'個人詞庫':str2bool(self.value)})
@@ -376,17 +463,166 @@ class EventText():
         '''
             回憶模式
         '''
-        if self.group_id is None or self.key in cfg['詞組']['自己的']:
-            if self.user_id is None:
+        score_default = {
+            '調教':30,
+            '觸發':10,
+            '對話':1,
+            '貼圖':1,
+            '網頁':0.5,
+            '髒話':-100,
+            '字數':0.1,
+        }
+
+        def _score(user_id):
+            score = 0
+            for key, value in score_default.items():
+                try:
+                    score += self.group.count['設定'][key] * self.group.count[user_id][key]
+                except:
+                    score += value * self.group.count[user_id][key]
+            return score
+
+        def _get(user):
+            #score = 0
+            #for key, value in score_default.items():
+            #    try:
+            #        score += self.group.count['設定'][key] * self.group.count[user.id][key]
+            #    except:
+            #        score += value * self.group.count[user.id][key]
+            score = _score(user.id)
+
+            return '\n'.join([
+                '愛醬記得這群的 %s...' % (user.name if user.name is not None else '你'),
+                '調教愛醬 %s 次' % (self.group.count[user.id]['調教']),
+                '跟愛醬說話 %s 次' % (self.group.count[user.id]['觸發']),
+                '有 %s 次對話' % (self.group.count[user.id]['對話']),
+                '有 %s 次貼圖' % (self.group.count[user.id]['貼圖']),
+                '有 %s 次傳送門' % (self.group.count[user.id]['網頁']),
+                '講過 %s 次「幹」' % (self.group.count[user.id]['髒話']),
+                '總計 %s 個字' % (self.group.count[user.id]['字數']),
+                '----------',
+                '總分 %.0f' % (score if score > 0 else 0),
+            ])
+
+        if not self.in_group:
+            return '暫時還沒有個人回憶'
+
+        if self.key in cfg['詞組']['自己的']:
+            #查詢自己
+            if self.is_unknown_user:
                 return text['權限不足']
 
+            if self.user.id not in self.group.count:
+                self._count({}) #如果沒有任何紀錄刷新一筆空的進行初始化
+            
+            return _get(self.user)
+
+        elif self.key in ['排名', '排行']:
+            #排行榜
+            rank = []
+            for user, _ in self.group.count.items():
+                if user is None or user == '設定':
+                    continue
+                user = User.query.get(user)
+                if user is None:
+                    continue
+                score = _score(user.id)
+                for u in rank:
+                    if score > u['score']:
+                        u['user'] = user
+                        u['score'] = score
+                        break
+                else:
+                    if len(rank) < 3:
+                        rank.append({'user':user, 'score':score})
+
+            if len(rank) < 3:
+                return '你們群組說話的不足三個\n(沒有權限等同不存在)'
+
+            n = 0
+            reply_message = []
+            for u in rank:
+                n += 1
+                reply_message.append('第%s名\n%s\n共 %s 分！' % (n, u['user'].name, int(u['score'])))
+            return reply_message
+            
+        elif self.key in ['設定', '設置'] or self.key in list(score_default.keys()):
+            #設定分數
+            if self.value is None:
+                values = []
+                for key, value in score_default.items():
+                    try:
+                        values.append('%s = %s' % (key, self.group.count['設定'][key]))
+                    except:
+                        values.append('%s = %s' % (key, value))
+                return '目前分數設定為:\n%s\n\n調整方法為\n「回憶=類型=值」\n栗子\n回憶=對話=5' % '\n'.join(values)
+            else:
+                if self.key not in list(score_default.keys()):
+                    return '沒有<%s>類型' % (self.key)
+                if '設定' not in self.group.count:
+                    self.group.count['設定'] = {}
+                self.group.count['設定'][self.key] = float(self.value)
+                return '設定完成'
+
+        elif self.key in cfg['詞組']['全部']:
+            #查詢整群
+            total = {}.fromkeys(['人數', '調教', '觸發', '對話', '貼圖', '圖片', '網頁', '髒話', '字數'], 0)
+            for _, user in self.group.count.items():
+                total['人數'] += 1
+                for key, value in user.items():
+                    total[key] += value
+
+            return '\n'.join([
+                '愛醬記得這個群組...',
+                '有 %s 個人說過話' % total['人數'],
+                '愛醬被調教 %s 次' % (total['調教']),
+                '跟愛醬說話 %s 次' % (total['觸發']),
+                '有 %s 次對話' % (total['對話']),
+                '有 %s 次貼圖' % (total['貼圖']),
+                '有 %s 次傳送門' % (total['網頁']),
+                '講過 %s 次「幹」' % (total['髒話']),
+                '總計 %s 個字' % (total['字數']),
+            ])
+
+        elif self.key is not None:
+            #查詢別人
+            users = {}
+            self.key = self.key.strip('@ \n')
+            for user_id in self.group.count.keys():
+                if user_id is None:
+                    continue
+                user = User.query.get(user_id)
+                try:
+                    if user is not None and self.key in user.name:
+                        users[user_id] = user
+                except:
+                    pass
+
+            if len(users) == 0:
+                return '找不到 <%s>\n可能是\n1.名稱輸入錯誤\n2.該人沒有說過話\n3.權限不足' % (self.key)
+            if len(users) > 1:
+                return '查詢到 %s 人\n請輸入更完整的名稱' % (len(users))
+            return _get(list(users.values())[0])
+
+        return '\n'.join([
+            '「回憶=我」　　查詢自己',
+            '「回憶=全部」　查詢全部',
+            '「回憶=<名字>」查詢別人',
+            '「回憶=設定」　查詢設定',
+            '(吐嘲暫時移除)',
+        ])
+
+        '''
+        舊的
+        if 1:
             reply_message = []
             try:
                 user_name = bots[self.bot_id].get_group_member_profile(self.group_id, self.user_id).display_name
             except:
                 user_name = '你'
+            
             data = MessageLogs.get(user_id=self.user_id)
-            reply_message.append('愛醬記得 %s...\n' % user_name)
+            reply_message.append('愛醬記得這群的 %s...\n' % user.name)
             reply_message.append('調教愛醬 %s 次' % data['nAIset'])
             reply_message.append('跟愛醬說話 %s 次' % data['nAItrigger'])
             reply_message.append('有 %s 次對話' % data['nText'])
@@ -432,7 +668,7 @@ class EventText():
 
             reply_message.append('(個人紀錄輸入「回憶=我」)\n(完整紀錄輸入「回憶=全部」)')
             return ['\n'.join(reply_message), reply_message_random[1]]
-
+        '''
 
     def google(self):
         '''
@@ -441,7 +677,8 @@ class EventText():
         if self.key is None:
             return text['google說明']
 
-        MessageLogs.add(self.group_id, self.user_id, nAItrigger=1) #紀錄次數
+        self._count({'觸發':1}) #紀錄次數
+        #MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
 
         return google_search(self.message[self.message.find('='):])
 
@@ -453,7 +690,8 @@ class EventText():
         if self.key is None:
             return text['google短網址說明']
 
-        MessageLogs.add(self.group_id, self.user_id, nAItrigger=1) #紀錄次數
+        self._count({'觸發':1}) #紀錄次數
+        #MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
 
         return '愛醬幫你申請短網址了喵\n%s' % google_shorten_url(self.message.replace('短網址=', ''))
 
@@ -476,12 +714,15 @@ class EventText():
         '''
             E變態搜尋
         '''
-        MessageLogs.add(self.group_id, self.user_id, nAItrigger=1) #紀錄次數
-
         if self.group_id is not None:
             return '暫時限制只能在1對1使用喔'
+
         if self.key is None:
             return text['ehentai說明']
+
+        self._count({'觸發':1}) #紀錄次數
+        #MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
+
         return ehentai_search(self.key)
 
 
@@ -489,12 +730,15 @@ class EventText():
         '''
             EX變態搜尋
         '''
-        MessageLogs.add(self.group_id, self.user_id, nAItrigger=1) #紀錄次數
-
         if self.group_id is not None:
             return '暫時限制只能在1對1使用喔'
+
         if self.key is None:
             return text['exhentai說明']
+
+        self._count({'觸發':1}) #紀錄次數
+        #MessageLogs.add(self.group_id, self.user_id, nAIset=1) #紀錄次數
+
         return exhentai_search(self.key)
 
 
@@ -502,25 +746,39 @@ class EventText():
         '''
             關鍵字觸發
         '''
-        if self.group_id is not None and 'http:' in self.message or 'https:' in self.message: #如果內容含有網址 做網址檢查
-            MessageLogs.add(self.group_id, self.user_id, nUrl=1) #紀錄次數
-            return google_safe_browsing(self.message)
+        if 'http:' in self.message or 'https:' in self.message: #如果內容含有網址 做網址檢查
+            if self.in_group:
+                self._count({'網頁':1}) #紀錄次數
+                #MessageLogs.add(self.group_id, self.user_id, nUrl=1) #紀錄次數
+                return google_safe_browsing(self.message)
+            else:
+                return '愛醬幫你申請短網址了喵\n%s' % google_shorten_url(self.message)
 
         self.message = self.message.lower().strip(' \n') #調整內容 以增加觸發命中率
-        MessageLogs.add(self.group_id, self.user_id, nText=1, nFuck=(self.message.count('幹') + self.message.count('fuck')), nLenght=len(self.message)) #紀錄次數
+        self._count({
+            '對話':1,
+            '髒話':self.message.count('幹') + self.message.count('fuck'),
+            '字數':len(self.message),
+        })
+        
+        #暫存訊息 用於對話模型訓練
+        if self.in_group: # and self.message[:2] != text['名稱']:
+            with open('E:\\bot_log\\%s.log' % self.group_id, 'a+', encoding='utf-8') as f:
+                f.write(self.message + '\n')
 
         #愛醬開頭可以強制呼叫
-        if self.group_id is not None and self.message != text['名稱'] and self.message[:2] == text['名稱']:
-            message_old = self.message
-            self.message = self.message[2:].strip(' \n')
-            reply_message = self.check(UserKeyword.get(self.group_id))
-            if reply_message is not None:
-                return reply_message
+        if self.group_id is not None:
+            if self.message != text['名稱'] and self.message[:2] == text['名稱']:
+                message_old = self.message
+                self.message = self.message[2:].strip(' \n')
+                reply_message = self.check(UserKeyword.get(self.group_id))
+                if reply_message is not None:
+                    return reply_message
 
-            reply_message = self.check(UserKeyword.get(self.user_id))
-            if reply_message is not None:
-                return reply_message
-            self.message = message_old #姑且先這樣
+                reply_message = self.check(UserKeyword.get(self.user_id))
+                if reply_message is not None:
+                    return reply_message
+                self.message = message_old #姑且先這樣
 
         #睡覺模式
         if UserSettings_temp.has_option(self.group_id, '暫停'):
@@ -530,10 +788,11 @@ class EventText():
                 return text['睡醒']
         #一般模式
         else:
-            if self.group_id is not None and not UserSettings.get(self.group_id, self.user_id, '別理我', False): #檢查不理我模式
-                reply_message = self.check(UserKeyword.get(self.group_id))
-                if reply_message is not None:
-                    return reply_message
+            if self.group_id is not None:
+                if not UserSettings.get(self.group_id, self.user_id, '別理我', False): #檢查不理我模式
+                    reply_message = self.check(UserKeyword.get(self.group_id))
+                    if reply_message is not None:
+                        return reply_message
 
             if self.group_id is None or UserSettings.get(self.group_id, self.user_id, '個人詞庫', False): #檢查是否使用個人詞庫
                 reply_message = self.check(UserKeyword.get(self.user_id))
@@ -567,20 +826,17 @@ class EventText():
                 if reply_message is not None:
                     return reply_message
                 else:
-                    bots['崩崩崩愛醬'].send_message(cfg['admin_line'], self.message)
                     reply_message = self.check(userkeyword_arr['<0'], exclude_url=not filter_url)
                     #reply_message = check(UserKeyword.query.filter(UserKeyword.level < 0), filter_url=not filter_url)
                     if reply_message is not None:
                         return reply_message
                     if self.group_id is not None:
-                        return '(?)'
+                        #return '(?)'
+                        return choice(text['未知'])
         
 
         if self.group_id is None:
-            if self.message[:4] == 'http':
-                return '愛醬幫你申請短網址了喵\n%s' % google_shorten_url(message)
-            else:
-                return '群組指令說明輸入【指令】\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n<1:1自動開啟全回應與全圖片模式>\n其他功能如果有建議請使用回報'
+            return '群組指令說明輸入「指令」\n個人服務:\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n<1:1自動開啟全回應與全圖片模式>\n其他功能如果有建議請使用回報'
         else:
             return None
 
@@ -622,6 +878,7 @@ class EventText():
                     result.append(v)
             except Exception as e:
                 bots['開發部'].send_message(cfg['admin_line'], '錯誤:%s\ngid:%s\nuid:%s\nmsg:%s\nkey:<%s>\n<%s>' % (str(e), self.group_id, self.user_id, self.message, k, v))
+                raise e
         if len(result) > 0:
             return self.later(choice(result)) #結果集隨機抽取一個
         return None
@@ -631,7 +888,8 @@ class EventText():
         '''
             關鍵字觸發的後處理
         '''
-        MessageLogs.add(self.group_id, self.user_id, nAItrigger=1) #紀錄次數
+        self._count({'觸發':1})
+        #MessageLogs.add(self.group_id, self.user_id, nAItrigger=1) #紀錄次數
 
         #取參數
         opt = {}
@@ -648,7 +906,7 @@ class EventText():
 
         filter_fuck = self.group_id is not None and UserSettings.get(self.group_id, None, '髒話過濾', True)
         if filter_fuck and isValueHaveKeys(self.message, cfg['詞組']['髒話']):
-            return '愛醬是好孩子不說髒話!!\n(可用【設定】關閉)'
+            return '愛醬是好孩子不說髒話!!\n(可用「設定」關閉)'
 
         #隨機 (算法:比重)
         if '__' in reply_message:

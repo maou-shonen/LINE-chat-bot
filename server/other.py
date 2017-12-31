@@ -90,21 +90,24 @@ def ehentai_search(key):
 
 
 
-
-client = requests.Session()
-client.headers.update({'User-Agent': cfg['user_agent']})
-client.get('https://e-hentai.org')
-client.post('https://forums.e-hentai.org/index.php?act=Login&CODE=01', data={
-	'CookieDate': '1',
-	'b': 'd',
-	'bt': '1-1',
-	'UserName':cfg['ehentai']['帳號'],
-	'PassWord':cfg['ehentai']['密碼'],
-	'ipb_login_submit':'Login!',
-})
+client = None
 
 exhentai_search_time = 0
 def exhentai_search(key):
+    global client
+    if client is None:
+        client = requests.Session()
+        client.headers.update({'User-Agent': cfg['user_agent']})
+        client.get('https://e-hentai.org')
+        client.post('https://forums.e-hentai.org/index.php?act=Login&CODE=01', data={
+            'CookieDate': '1',
+            'b': 'd',
+            'bt': '1-1',
+            'UserName':cfg['ehentai']['帳號'],
+            'PassWord':cfg['ehentai']['密碼'],
+            'ipb_login_submit':'Login!',
+        })
+
     headers = {'User-Agent':cfg['user_agent']}
     url = 'https://exhentai.org/?' + urlencode({
         'f_doujinshi':'1',

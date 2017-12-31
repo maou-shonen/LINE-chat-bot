@@ -41,7 +41,7 @@ def str2bool(s):
         return True
     if s in cfg['詞組']['否']:
         return False
-    raise Exception('str2bool 無法識別 <%s>' % s)
+    raise Exception('無法識別 <%s>' % s)
 
 def isFloat(s):
     try:

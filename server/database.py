@@ -19,12 +19,48 @@ class NullObject:
             self.__dict__.update(argv)
 
 
+class User(db.Model):
+    id     = db.Column(db.String(35), primary_key=True)
+    use_on = db.Column(db.DateTime)
+    name   = db.Column(db.String(20))
+
+    def __init__(self, id):
+        self.id = id
+
+    def update(self):
+        self.use_on = datetime.now()
+
+
+class Group(db.Model):
+    id       = db.Column(db.String(35), primary_key=True)
+    use_on   = db.Column(db.DateTime)
+    news     = db.Column(db.TEXT)
+    _count   = db.Column(db.TEXT) #db.JSON
+    _setting = db.Column(db.TEXT) #db.JSON
+
+    def __init__(self, id):
+        self.id = id
+        self._count = '{}'
+        self._setting = '{}'
+
+    def _json(self):
+        if 'count' not in self.__dict__:
+            self.count = json.loads(self._count)
+            self.setting = json.loads(self._setting)
+
+    def update(self):
+        #self.use_on = datetime.now()
+        self._count = json.dumps(self.count)
+        self._setting = json.dumps(self.setting)
+
+
 ###############################################
 #   使用者狀態
 class UserStatus(db.Model):
     id     = db.Column(db.String(35), primary_key=True)
     use_on = db.Column(db.DateTime)
     news   = db.Column(db.TEXT)
+    name   = db.Column(db.String(20))
 
     def __init__(self, id):
         self.id = id
@@ -69,6 +105,18 @@ class UserStatus(db.Model):
             return True
         return False
 
+    @staticmethod
+    def get(id, option):
+        '''
+            取得設定
+        '''
+        row = UserStatus.__get(id)
+
+    @staticmethod
+    def set(id, option):
+        '''
+            變更設定
+        '''
 
 
 ###############################################
@@ -304,4 +352,32 @@ def UserKeywordClone(_from, to):
 
 
 if __name__ == '__main__':
-    db.create_all()
+    #db.create_all()
+    gs = {}
+    for i in MessageLogs.query.all():
+        if i.group_id is not None:
+            g = Group.query.get(i.group_id)
+            if g is None:
+                g = Group(i.group_id)
+                db.session.add(g)
+            g._json()
+
+            if i.user_id not in g.count:
+                g.count[i.user_id] = {}.fromkeys(['調教', '觸發', '對話', '貼圖', '圖片', '網頁', '髒話', '字數'], 0)
+            
+            g.count[i.user_id]['調教'] += i.nAIset
+            g.count[i.user_id]['觸發'] += i.nAItrigger
+            g.count[i.user_id]['對話'] += i.nText
+            g.count[i.user_id]['貼圖'] += i.nSticker
+            g.count[i.user_id]['圖片'] += i.nImage
+            g.count[i.user_id]['網頁'] += i.nUrl
+            g.count[i.user_id]['髒話'] += i.nFuck
+            g.count[i.user_id]['字數'] += i.nLenght
+
+            g.update()
+            db.session.commit()
+
+    #for g in gs.values():
+        #g.update()
+    
+    print('ok')

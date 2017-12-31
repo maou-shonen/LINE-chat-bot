@@ -16,7 +16,7 @@ class LineBot(LineBotApi):
             self.push_message(to, TextSendMessage(text=msg))
 
     def reply_message(self, reply_token, messages):
-        if messages is None:
+        if reply_token is None or messages is None:
             return
 
         if type(messages) == str:
@@ -25,7 +25,7 @@ class LineBot(LineBotApi):
         message_object = []
         for message in messages[:5]:
             message = message.strip(' \n')
-            if message == '' or message == '\n':
+            if message == '':
                 message_object.append(TextSendMessage('<設定錯誤此為空白內容>'))
             if message[:6] == 'https:':
                 message = message.strip(' \n')
