@@ -29,6 +29,14 @@ class ConfigFile(ConfigParser):
         ConfigParser.set(self, section, option, value)
 
 
+def download(url, file_path, timeout=30):
+    response = requests.get(url, stream=True, timeout=timeout)
+
+    with open(file_path, "wb") as handle:
+        for data in response.iter_content():
+            handle.write(data)
+
+
 def isValueHaveKeys(value, keys):
     for key in keys:
         if key in value:
