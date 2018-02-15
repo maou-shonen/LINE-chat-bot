@@ -5,3 +5,4 @@ mysqlclient
 pydrive
 pixivpy
 feedparser
+imgurpython

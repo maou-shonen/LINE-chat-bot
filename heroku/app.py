@@ -3,7 +3,7 @@ import time
 import requests
 from requests import post
 
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -68,6 +68,8 @@ def handle_sticker(event):
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
+    r = _post('/test', **get_id(event), message=None, message_id=event.message.id, reply_token=event.reply_token)
+    return 'ok'
     _post('/image', **get_id(event))
 
     def get_imgur_client():
@@ -121,6 +123,9 @@ def leave(event):
 def postback(event):
     _post('/postback', **get_id(event))
 
+@app.route('/get_ip')
+def get_ip():
+    return jsonify({'ip': request.environ.get('HTTP_X_REAL_IP', request.remote_addr)}), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

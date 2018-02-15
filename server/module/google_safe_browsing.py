@@ -57,7 +57,7 @@ def google_safe_browsing(message):
         return 'Google網址檢查：查詢失敗'
 
     if len(r.json()) == 0:
-        return 'Google網址檢查：安全'
+        return None
 
     reply_message = ['Google網址檢查：危險！\n']
 

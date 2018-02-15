@@ -4,10 +4,11 @@ from api import cfg
 from bs4 import BeautifulSoup
 from urllib.parse import urlencode
 from time import time, sleep
+from database import db, UrlShortener
 
 
 def google_shorten_url(url):
-    if cfg['google_api_key'] is None:
+    if cfg['google.com']['api_key'] is None:
         return '此功能現在沒有開放喵'
     api_url = 'https://www.googleapis.com/urlshortener/v1/url?key=%s' % (cfg['google_api_key'])
     datas = {'longUrl': url}
@@ -43,11 +44,13 @@ def google_search(key):
     results = soup.select('h3.r a')
     for result in results[:5]:
         link = result.get('href')
+        link = UrlShortener.add(link)
         reply_messages.append('%s\n%s' % (result.text, link))
     
     if len(reply_messages) > 0:
+        url = UrlShortener.add(url)
         reply_messages.append('<查詢更多>\n%s' % url)
-        return '\n\n'.join(reply_messages) + '\n(未來會添加短連結)'
+        return '\n\n'.join(reply_messages)
     return '沒有找到符合的結果喔'
 
 
@@ -81,11 +84,13 @@ def ehentai_search(key):
     results = soup.select('.it5')
     for result in results[:5]:
         link = result.find('a').get('href')
+        link = UrlShortener.add(link)
         reply_messages.append('%s\n%s' % (result.text, link))
     
     if len(reply_messages) > 0:
+        url = UrlShortener.add(url)
         reply_messages.append('<查詢更多>\n%s' % url)
-        return '\n\n'.join(reply_messages) + '\n(未來會添加短連結)'
+        return '\n\n'.join(reply_messages)
     return '沒有找到符合的結果喔'
 
 
@@ -136,11 +141,13 @@ def exhentai_search(key):
     results = soup.select('.it5')
     for result in results[:5]:
         link = result.find('a').get('href')
+        link = UrlShortener.add(link)
         reply_messages.append('%s\n%s' % (result.text, link))
     
     if len(reply_messages) > 0:
+        url = UrlShortener.add(url)
         reply_messages.append('<查詢更多>\n%s' % url)
-        return '\n\n'.join(reply_messages) + '\n(未來會添加短連結)'
+        return '\n\n'.join(reply_messages)
     return '沒有找到符合的結果喔'
 
 
@@ -163,3 +170,52 @@ def pixiv_search(key):
         #圖 i['image_urls']['px_480mw']
     return d
 '''
+
+
+###############################################
+# imgur上傳
+import os
+from imgurpython import ImgurClient
+class Imgur:
+    client = None
+
+    def _connect(self):
+        if not self.client:
+            try:
+                self.client = ImgurClient(cfg['imgur.com']['id'], cfg['imgur.com']['secret'])
+            except Exception as e:
+                raise Exception('imgur連線錯誤: %s' % (str(e)))
+
+    def upload(self, path, delete_on_uploaded=True):
+        self._connect()
+
+        for i in range(100):
+            try:
+                image = self.client.upload_from_path(path)
+                break
+            except Exception as e:
+                if i < 99:
+                    sleep(0.2)
+                else:
+                    raise Exception('imgur上傳錯誤: %s' % (str(e)))
+        url = image['link']
+
+        if delete_on_uploaded:
+            os.remove(path)
+
+        return url
+
+
+    def uploadByLine(self, bot, message_id):
+        self._connect()
+
+        tmp_file = '%s\%s.tmp' % (cfg['temp_dir'], message_id)
+        message_content = bot.get_message_content(message_id)
+
+        with open(tmp_file, 'wb') as f:
+            for chunk in message_content.iter_content():
+                f.write(chunk)
+
+        return self.upload(tmp_file)
+
+imgur = Imgur()

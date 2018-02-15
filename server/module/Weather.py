@@ -1,6 +1,7 @@
 '''
     天氣模組
 '''
+import os
 from api import cfg, download
 from time import time
 from datetime import datetime
@@ -54,8 +55,8 @@ def __update():
                 weathers[name][weather_time].append(t.text)
 
 
-def get_weather(loc):
-    global weathers_time
+def get_weather(user, key):
+    global weathers, weathers_time
     if time() - weathers_time > (60*60):
         try:
             __update()
@@ -63,22 +64,37 @@ def get_weather(loc):
         except Exception as e:
             raise e
 
-    loc = loc.replace('台', '臺')
-    if loc in ['馬祖', '東引', '西引', '莒光', '南竿']:
-        loc = '連江縣'
-    
-    for localtion in weathers.keys():
-        if loc in localtion:
-            reply_message = ['[%s]' % (localtion)]
-            
-            for i in range(3):
-                start_time = __conver_date(weathers[localtion]['startTime'][i])
-                end_time = __conver_date(weathers[localtion]['endTime'][i])
+    if key is None or key == '':
+        try:
+            loc = user.location
+        except:
+            loc = None
+    else:
+        loc = key
 
-                reply_message.append('\n%s 到 %s' % (start_time, end_time))
-                reply_message.append('%s（降雨%s％）' % (weathers[localtion]['Wx'][i], weathers[localtion]['PoP'][i]))
-                reply_message.append('%s℃ - %s℃ %s' % (weathers[localtion]['MinT'][i], weathers[localtion]['MaxT'][i], weathers[localtion]['CI'][i]))
+    if loc is not None:
+        loc = loc.replace('台', '臺')
+        if loc in ['馬祖', '東引', '西引', '莒光', '南竿']:
+            loc = '連江縣'
+        
+        for localtion in weathers.keys():
+            if loc in localtion:
+                reply_message = ['[%s]' % (localtion)]
+                
+                for i in range(3):
+                    start_time = __conver_date(weathers[localtion]['startTime'][i])
+                    end_time = __conver_date(weathers[localtion]['endTime'][i])
 
-            return '\n'.join(reply_message) + '\n\n資料來自氣象開放平台\nopendata.cwb.gov.tw'
+                    reply_message.append('\n%s 到 %s' % (start_time, end_time))
+                    reply_message.append('%s（降雨%s％）' % (weathers[localtion]['Wx'][i], weathers[localtion]['PoP'][i]))
+                    reply_message.append('%s℃ - %s℃ %s' % (weathers[localtion]['MinT'][i], weathers[localtion]['MaxT'][i], weathers[localtion]['CI'][i]))
 
-    return '地點輸入錯誤\n台中市輸入「台中」\n新北市輸入「新北」即可'
+                reply_message.append('\n已紀錄你最後查詢的<%s>\n變更請輸入「天氣=<地點>」' % loc)
+                reply_message.append('資料來自氣象開放平台\nopendata.cwb.gov.tw')
+
+                if user:
+                    user.location = loc
+
+                return '\n'.join(reply_message)
+
+    return '台中市輸入「天氣=台中」\n新北市輸入「天氣=新北」即可\n暫時只有台灣的氣象資料\n其他地方的之後會增加'
