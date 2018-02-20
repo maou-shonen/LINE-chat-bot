@@ -1,3 +1,2 @@
 line-bot-sdk
 flask
-imgurpython

@@ -1,6 +1,7 @@
 from time import sleep
 import requests.exceptions
 from api import cfg
+from app import app
 from database import db, MessageQueue
 from linebot import LineBotApi
 from linebot.exceptions import LineBotApiError
@@ -55,11 +56,12 @@ class LineBot(LineBotApi):
             row = MessageQueue(to, message)
             db.session.add(row)
 
-    def __message_format(self, messages):
+    def __message_format(self, messages, format=True):
         if type(messages) == str:
             messages = [messages]
 
-        message_object = []
+        contents = []
+
         for message in messages:
             if message is None or type(message) != str:
                 continue
@@ -68,30 +70,32 @@ class LineBot(LineBotApi):
             if message == '':
                 continue
 
+            if not format:
+                contents.append(TextSendMessage(message))
+                continue
+
             message = repair_image_url(message)
             
             if message[:6] == 'https:':
                 if 'imgur.com' in message or is_image_and_ready(message):
-                    message_object.append(ImageSendMessage(message, message))
+                    contents.append(ImageSendMessage(message, message))
                 else:
-                    message_object.append(TextSendMessage(message))
+                    contents.append(TextSendMessage(message))
             else:
                 if len(message) >= 1500:
                     message = message[:1500] + '\n<字數過多 後略>'
-                message_object.append(TextSendMessage(message))
+                contents.append(TextSendMessage(message))
 
-        if len(message_object) == 0:
-            message_object.append(TextSendMessage('<此為空白內容>\n<由設定錯誤引發>'))
-        return message_object[:5]
+        if len(contents) == 0:
+            contents.append(TextSendMessage('<此為空白內容>\n<由設定錯誤引發>'))
 
-    def push(self, to=None, reply_token=None, messages=None):
-        if to is None:
-            raise Exception('to未定義')
+        return contents[:5]
 
+    def push(self, to, messages, reply_token=None, format=True):
         if type(messages) != list:
             messages = [messages]
 
-        messages = MessageQueue.get(to, messages)
+        #messages = MessageQueue.get(to, messages)
 
         if len(messages) == 0:
             return False
@@ -99,41 +103,35 @@ class LineBot(LineBotApi):
         error = None
             
         #reply by token
-        if reply_token is not None:
-            messages_object = self.__message_format(messages)
+        if reply_token:
+            content = self.__message_format(messages, format=format)
+            print(content)
             for i in range(3):
                 try:
-                    self.reply_message(reply_token, messages_object)
+                    self.reply_message(reply_token, content)
                     return True
                 except Exception as e:
-                    print('to', to, 'obj', messages_object, len(messages_object))
-                    error = e
                     sleep(1)
+            else:
+                app.logger.warning('傳送失敗 to=%s messages=%s' % (to, messages))
+                return False
         
         #push
-        if self.can_push and to is not None:
-            messages_temp = messages.copy()
-            messages = []
-            for m in messages_temp:
-                mo = self.__message_format(m)
+        elif self.can_push:
+            while len(messages) > 0:
+                content = self.__message_format(messages.pop(0), format=format)
                 for i in range(3):
                     try:
-                        self.push_message(to, mo) #multicast
+                        self.push_message(to, content)
                         break
                     except Exception as e:
-                        error = e
                         sleep(1)
                 else:
-                    messages.append(i)
-
-            if len(messages) == 0:
-                return True
+                    app.logger.warning('傳送失敗 to=%s messages=%s' % (to, messages))
+            return True
 
         #queue
-        
-        if error is not None:
-            raise error
-        self.__message_queue(to, messages)
+        #self.__message_queue(to, messages)
 
         return False
 

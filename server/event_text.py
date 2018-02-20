@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from hashlib import md5
 
 from api import *
+from app import app
 from logger import logger
 from database import db, UserKeyword, UserSettings, MessageQueue, WebUI
 from other import google_shorten_url, ehentai_search, exhentai_search, google_search
@@ -29,6 +30,9 @@ class EventText():
     user_id  = None
     group_id = None
     message  = None
+    reply_token = None
+    sticker = None
+    image = None
 
     def __init__(self, **argv):
         self.__dict__.update(**argv)
@@ -91,7 +95,7 @@ class EventText():
         '''
         if self.message:
             uid = '%s%s' % (self.user_id[1:5] if self.user_id else self.user_id, '@%s' % self.group_id if self.group else '')
-            logger.info('%s > %s' % (uid, self.message))
+            app.logger.info('%s > %s' % (uid, self.message))
 
             t0 = time()
             reply_message = self.index()
@@ -108,9 +112,9 @@ class EventText():
                     for message in reply_message:
                         MessageQueue.add(self.group.id, message)
             else:
-                if self.bot.push(to=self.group.id if self.group else self.user.id, reply_token=self.reply_token, messages=reply_message):
+                if self.bot.push(self.group.id if self.group else self.user.id, reply_message, reply_token=self.reply_token):
                     t2 = time() - t1 - t0
-                    logger.info('%s < %s %s' % (uid, reply_message, '(%dms, %dms)' % (t1*1000, t2*1000)))
+                    app.logger.info('%s < %s %s' % (uid, reply_message, '(%dms, %dms)' % (t1*1000, t2*1000)))
 
         elif self.sticker:
             reply_message = []
@@ -119,6 +123,14 @@ class EventText():
         elif self.image:
             reply_message = []
             self._count({'圖片':1})
+
+            if not self.group:
+                from other import imgur
+                try:
+                    content = imgur.uploadByLine(self.bot, self.message_id)
+                except Exception as e:
+                    content = str(e)
+                self.bot.push(self.user.id, content, reply_token=self.reply_token, format=False)
 
         #刷新資料
         if self.user:

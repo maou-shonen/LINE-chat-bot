@@ -189,15 +189,14 @@ class Imgur:
     def upload(self, path, delete_on_uploaded=True):
         self._connect()
 
-        for i in range(100):
+        for i in range(10):
             try:
                 image = self.client.upload_from_path(path)
                 break
             except Exception as e:
-                if i < 99:
-                    sleep(0.2)
-                else:
-                    raise Exception('imgur上傳錯誤: %s' % (str(e)))
+                sleep(1)
+        else:
+            raise Exception('imgur上傳錯誤: %s' % (str(e)))
         url = image['link']
 
         if delete_on_uploaded:
