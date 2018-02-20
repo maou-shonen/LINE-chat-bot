@@ -1,7 +1,6 @@
 from threading import Thread 
-from api import cfg
 from pixivpy3 import PixivAPI
-from other import imgur
+from api import cfg
 
 
 class Pixiv(Thread):

@@ -1,4 +1,5 @@
 import requests
+import threading
 from time import time
 from random import choice, randint, uniform, sample
 from datetime import datetime, timedelta
@@ -25,7 +26,7 @@ database分離 用於pro版的相容
 '''
 
 
-class EventText():
+class EventText(threading.Thread):
     bot_id   = None
     user_id  = None
     group_id = None
@@ -35,6 +36,7 @@ class EventText():
     image = None
 
     def __init__(self, **argv):
+        threading.Thread.__init__(self)
         self.__dict__.update(**argv)
 
         self.bot = bots.get(self.bot_id, None)
@@ -91,6 +93,23 @@ class EventText():
 
     def run(self):
         '''
+            臨時中界層
+        '''
+        try:
+            self.run2()
+        except Exception as e:
+            app.logger.error('ERROR')
+            try:
+                push_developer('<愛醬BUG>\n%s' % str(e))
+                self.bot.push(self.group.id, '愛醬出錯了！\n作者可能會察看此錯誤報告', reply_token=self.reply_token)
+            except:
+                print('傳送失敗')
+            db.session.commit()
+            raise e
+
+
+    def run2(self):
+        '''
             接收發送訊息邏輯
         '''
         if self.message:
@@ -125,7 +144,6 @@ class EventText():
             self._count({'圖片':1})
 
             if not self.group:
-                from other import imgur
                 try:
                     content = imgur.uploadByLine(self.bot, self.message_id)
                 except Exception as e:

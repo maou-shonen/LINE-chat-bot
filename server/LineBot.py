@@ -95,7 +95,7 @@ class LineBot(LineBotApi):
         if type(messages) != list:
             messages = [messages]
 
-        #messages = MessageQueue.get(to, messages)
+        messages = MessageQueue.get(to, messages)
 
         if len(messages) == 0:
             return False
@@ -105,7 +105,6 @@ class LineBot(LineBotApi):
         #reply by token
         if reply_token:
             content = self.__message_format(messages, format=format)
-            print(content)
             for i in range(3):
                 try:
                     self.reply_message(reply_token, content)
@@ -113,7 +112,7 @@ class LineBot(LineBotApi):
                 except Exception as e:
                     sleep(1)
             else:
-                app.logger.warning('傳送失敗 to=%s messages=%s' % (to, messages))
+                app.logger.warning('傳送失敗 to=%s messages=%s' % (to, content))
                 return False
         
         #push

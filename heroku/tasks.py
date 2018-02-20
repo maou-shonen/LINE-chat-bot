@@ -17,7 +17,7 @@ class Tasks(threading.Thread):
             self.event.clear()
             self.event.wait()
             while not self._run():
-                sleep(60)
+                sleep(3)
 
     def _run(self):
         while True:
@@ -26,7 +26,7 @@ class Tasks(threading.Thread):
 
             task = self.queue.pop(0)
             try:
-                r = requests.post(self.host + task['endpoint'], json=task['json'], timeout=30)
+                r = requests.post(self.host + task['endpoint'], json=task['json'], timeout=3)
                 if r.ok:
                     app.logger.info(r.text)
             except Exception as e:
