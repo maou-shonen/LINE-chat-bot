@@ -3,9 +3,10 @@
 附帶一些其他功能
 
 # 2019.05.21
+```
 舊的壞掉了  
 新的 @839knlix  
-![](https://qr-official.line.me/sid/L/839knlix.png)
+```
 
 
 # 索引
