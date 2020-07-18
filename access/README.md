@@ -33,7 +33,7 @@
 ![step08-2](https://github.com/mao-shonen/LINE-chat-bot/blob/master/access/step08-2.jpg)
 
 回到中間的位置填入 `webhook url`  
-格式為 `https://{API網址}/callback/{channel secret}/{channel https://github.com/mao-shonen/LINE-chat-bot/blob/master/access token}`  
+格式為 `https://{API網址}/callback/{channel secret}/{channel access token}`  
 API網址目前為 `linebot.maou.app` 如果有更換會在專案的首頁READEME.md中公告
 
 填入後看起來像這樣
