@@ -7,7 +7,7 @@
 舊的壞掉了  
 新的 @402djtgu
 ```
-現在可以自己定義Line Bot連進來了 說明在 [access](tree/master/access)
+現在可以自己定義Line Bot連進來了 說明在 [access](https://github.com/mao-shonen/LINE-chat-bot/tree/master/access)
 
 ## 2020.03.12
 ```
