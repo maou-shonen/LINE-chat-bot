@@ -1,9 +1,21 @@
-version: '2'
+version: "3.8"
+
+networks:
+  traefik:
+    external: yes
 
 services:
-   line-bot:
-      build: server
-      restart: always
-      ports:
-         - "9999:5000"
-         
+  app:
+    build: .
+    restart: always
+    networks:
+      - traefik
+    volumes:
+      - .:/app
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.my-service.loadbalancer.server.port=80
+      - traefik.http.routers.linebot.rule=Host(`linebot.maou.app`)
+      #- traefik.http.routers.linebot.entrypoints=websecure
+      #- traefik.http.routers.linebot.tls.certresolver=myresolver
+      - traefik.http.middlewares.linebot.compress=true

@@ -1,2 +1,0 @@
-line-bot-sdk
-flask

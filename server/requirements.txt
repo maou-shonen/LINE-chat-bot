@@ -1,8 +1,0 @@
-line-bot-sdk
-flask
-flask_sqlalchemy
-mysqlclient
-pydrive
-pixivpy
-feedparser
-imgurpython

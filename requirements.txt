@@ -1,0 +1,13 @@
+line-bot-sdk
+flask
+flask_sqlalchemy
+PyMySQL
+pydrive
+pixivpy
+feedparser
+imgurpython
+flask_compress
+bs4
+lxml
+gunicorn
+loguru
