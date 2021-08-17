@@ -1,7 +1,7 @@
 import requests
 import threading
 from time import time
-from random import choice, randint, uniform, sample
+from random import choice, randint, random, uniform, sample
 from datetime import datetime, timedelta
 from hashlib import md5
 
@@ -611,9 +611,32 @@ class EventText(threading.Thread):
                 '總計 %d 個字' % (total['字數']),
             ])
 
-        elif any(keyword in self.key for keyword in ['clean', 'clear', '清除']):
-            GroupUser.query.filter_by(gid=self.group.id).delete()
-            return '好好好！愛醬就當作大家什麼都沒說過吧！'
+        elif any(self.key.startswith(keyword + '=') for keyword in ['clean', 'clear', '清除']):
+            value = self.key[self.key.find('=')+1:]
+            if is_text_like(value, '全部'):
+                GroupUser.query.filter_by(gid=self.group.id).delete()
+                return '好好好！愛醬就當作大家什麼都沒說過吧！'
+            else: # 個別指定ID
+                users = {}
+                for row in GroupUser.query.filter_by(gid=self.group.id):
+                    if row.uid is None:
+                        continue
+                    user = User.query.get(row.uid)
+                    if user is None or user.name is None:
+                        continue
+                    if self.key == user.name:
+                        return _get(user)
+                    if self.key in user.name:
+                        users[user.id] = user
+
+                if len(users) == 0:
+                    return '找不到 <%s>\n可能是\n1.名稱輸入錯誤\n2.該人沒有說過話\n3.權限不足' % (self.key)
+                if len(users) > 1:
+                    return '查詢到 %s 人\n請輸入更完整的名稱' % (len(users))
+
+                for uid, user in users.items():
+                    GroupUser.query.filter_by(gid=self.group.id, uid=uid).delete()
+                    return f'{user.name}...是誰?'
 
         elif self.key:
             #查詢別人
@@ -641,7 +664,8 @@ class EventText(threading.Thread):
             '「回憶=全部」　查詢全部',
             '「回憶=<名字>」查詢別人',
             '「回憶=設定」　查詢設定',
-            '「回憶=清除」　清除對話次數紀錄 (無法復原)',
+            '「回憶=清除=全部」　清除群組全對話次數紀錄 (無法復原)',
+            '「回憶=清除=<名字>」　清除群組某人的對話次數紀錄 (無法復原)',
         ])
 
     def google(self):
