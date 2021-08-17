@@ -611,12 +611,11 @@ class EventText(threading.Thread):
                 '總計 %d 個字' % (total['字數']),
             ])
 
-        elif any(self.key.startswith(keyword + '=') for keyword in ['clean', 'clear', '清除']):
-            value = self.key[self.key.find('=')+1:]
-            if is_text_like(value, '全部'):
+        elif self.key in ['clean', 'clear', '清除']:
+            if is_text_like(self.value, '全部'):
                 GroupUser.query.filter_by(gid=self.group.id).delete()
                 return '好好好！愛醬就當作大家什麼都沒說過吧！'
-            else: # 個別指定ID
+            else: # 個別指定名稱
                 users = {}
                 for row in GroupUser.query.filter_by(gid=self.group.id):
                     if row.uid is None:
@@ -624,13 +623,14 @@ class EventText(threading.Thread):
                     user = User.query.get(row.uid)
                     if user is None or user.name is None:
                         continue
-                    if self.key == user.name:
-                        return _get(user)
-                    if self.key in user.name:
+                    if self.value == user.name:
+                        users[user.id] = user
+                        break
+                    if self.value in user.name:
                         users[user.id] = user
 
                 if len(users) == 0:
-                    return '找不到 <%s>\n可能是\n1.名稱輸入錯誤\n2.該人沒有說過話\n3.權限不足' % (self.key)
+                    return '找不到 <%s>\n可能是\n1.名稱輸入錯誤\n2.該人沒有說過話\n3.權限不足' % (self.value)
                 if len(users) > 1:
                     return '查詢到 %s 人\n請輸入更完整的名稱' % (len(users))
 
