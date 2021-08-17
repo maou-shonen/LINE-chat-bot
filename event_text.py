@@ -611,6 +611,10 @@ class EventText(threading.Thread):
                 '總計 %d 個字' % (total['字數']),
             ])
 
+        elif any(keyword in self.key for keyword in ['clean', 'clear', '清除']):
+            GroupUser.query.filter_by(gid=self.group.id).delete()
+            return '好好好！愛醬就當作大家什麼都沒說過吧！'
+
         elif self.key:
             #查詢別人
             users = {}
@@ -637,7 +641,7 @@ class EventText(threading.Thread):
             '「回憶=全部」　查詢全部',
             '「回憶=<名字>」查詢別人',
             '「回憶=設定」　查詢設定',
-            '(吐嘲暫時移除)',
+            '「回憶=清除」　清除對話次數紀錄 (無法復原)',
         ])
 
     def google(self):
