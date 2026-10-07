@@ -2097,9 +2097,20 @@
     "status": 200
   },
   {
-    "calls": [],
+    "calls": [
+      [
+        "reply",
+        "rt-104",
+        [
+          {
+            "text": "回報功能尚未設定，著急的話請直接聯絡開發者",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
     "name": "opinion_500",
-    "status": 500
+    "status": 200
   },
   {
     "calls": [],
@@ -2124,7 +2135,7 @@
   {
     "calls": [],
     "name": "missing_signature",
-    "status": 500
+    "status": 400
   },
   {
     "body": "pong",

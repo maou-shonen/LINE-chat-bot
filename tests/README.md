@@ -1,31 +1,30 @@
-# Golden harness: black-box behavior lock for the legacy Flask app (ef6a18e)
+# Tests: black-box behavior lock for the FastAPI app
 
 ## What
 
-`tests/golden/` drives the CURRENT app exactly as LINE does — signed
+`tests/golden/` drives the app exactly as LINE does — signed
 `POST /callback/<secret>/<token>` bodies — and records the exact outbound
-LINE payloads plus key DB effects into `golden.json`. The same
-`scenarios.yaml` must run unchanged against the rewritten app later.
+LINE payloads plus key DB effects into `golden.json`. The contract is
+(HTTP status, reply/push payloads, requested DB slices), not internals.
 
 ## Run
 
-From the repo root, with the legacy venv (CPython 3.8 per brief; prod was
-PyPy 3.7 — close enough for behavior parity):
+From the repo root:
 
 ```sh
-.venv-golden/bin/python -m pytest tests/golden/test_golden.py -q
+uv run pytest -q
 ```
 
 Single scenario subset (pytest `-k` matches the assertion message):
 
 ```sh
-.venv-golden/bin/python -m pytest tests/golden/test_golden.py -q -k sleep
+uv run pytest tests/golden/test_golden.py -q -k sleep
 ```
 
 ## Regenerate the golden (review every diff first, never blindly)
 
 ```sh
-REGEN_GOLDEN=1 .venv-golden/bin/python -m pytest tests/golden/test_golden.py -q
+REGEN_GOLDEN=1 uv run pytest tests/golden/test_golden.py -q
 git diff tests/golden/golden.json   # read all of it before committing
 ```
 
@@ -39,47 +38,28 @@ git diff tests/golden/golden.json   # read all of it before committing
 - `golden.json` — captured `(status, calls, db)` per scenario. `calls` are
   `["reply"|"push", target, [exact LINE message dicts]]`; `db` slices are
   `keywords` / `settings` / `counts` where behavior needs them.
-- `harness.py` — temp-cwd boot with a synthetic `config.yaml` (+ guard that
-  refuses the repo's real one), SQLite temp DB, and outbound interception:
-  `LineBotApi.reply/push/profile/content`, `requests.head` (image check),
-  random.org, Safe Browsing, imgur upload. Wall clock frozen at
-  2023-11-14 22:13:20 UTC; `time.sleep` no-op'd (10×1s imgur retry path).
-- `sitecustomize.py` — the config guard (imported first by the harness).
-- `config.synthetic.yaml` — the synthetic config template (fake keys,
-  `test_marker`).
+- `harness.py` — boots the FastAPI app with synthetic `Settings`
+  (SQLite temp DB, fake keys) and intercepts outbound HTTP at the httpx
+  transport layer: LINE reply/push (recorded as the exact JSON sent),
+  profile lookups (fixed display name `ProbeUser`), content download
+  (fixed bytes for the 1:1 image→imgur path), `HEAD` image checks
+  (content-type per URL suffix unless the scenario overrides it via
+  `head_map`), random.org multi-draw (scenario-controlled integers via
+  `random_org`, defaulting to deterministic zeros), Google Safe Browsing
+  (scenario-controlled via `safe_browsing`: `clean` or `threat`), imgur
+  upload (returns a fixed `https:` URL). Wall clock frozen at
+  2023-11-14 22:13:20 UTC (TZ pinned to UTC: the sleep-until timestamp is
+  the only wall-clock value in goldens); `random.seed` reset per step.
+- `test_runtime.py` — focused unit tests with literal expected values:
+  signature verify (valid/missing/bad → 200/400/400),
+  ACK-before-processing (a slow handler must not delay the 200), queue
+  ordering, and LINE client request shapes (literal JSON + headers).
 
-## Legacy venv
+## Known legacy quirks (fixed in the FastAPI rewrite)
 
-Built from prod pins in
-`/home/shonen/.cache/line-chat-bot-build/pip-freeze.txt`
-(Flask 2.0.1, Flask-SQLAlchemy 2.5.1, SQLAlchemy 1.4.22, line-bot-sdk 1.20.0,
-requests 2.26.0, …) via `uv`:
-
-```sh
-uv venv --python 3.8 .venv-golden
-uv pip install --python .venv-golden/bin/python \
-  Flask==2.0.1 Flask-SQLAlchemy==2.5.1 SQLAlchemy==1.4.22 \
-  line-bot-sdk==1.20.0 requests==2.26.0 PyYAML==5.4.1 \
-  loguru==0.5.3 imgurpython==1.1.7 PyMySQL==1.0.2 \
-  pytz==2021.1 pytest
-```
-
-Dropped from the freeze because they won't build / are never imported on
-covered paths: `readline` (C build failure on 3.8), `greenlet` (pulled
-modern by SQLAlchemy anyway), `cffi`/`Brotli`/`cloudscraper`,
-google-api stack, `PyDrive`, `gunicorn`, `Flask-Compress`, `feedparser`,
-`future`, `protobuf`/`rsa` chain, `readline`. No app code is touched except
-nothing: the only test-side compat shim is dropping `pool_size` /
-`pool_timeout` from `create_engine` (valid for prod MySQL, rejected by
-SQLite's NullPool).
-
-## Known legacy quirks (captured as-is, not fixed here)
-
-- `missing_signature` → **500** (raw `KeyError` on the header), not 400.
-  A rewrite SHOULD return 400; the golden pins 500 to prove the change.
-- `意見` (feedback) → **500**: `push_developer` needs `bots['admin']`,
-  which is never created. Same for any `check()` exception path
-  (`bots['admin'].send_message` doesn't exist either).
-- `回憶=清除=<name>` path → **500** in this env (`GroupUser` name lookup
-  raising); intentionally NOT in scenarios, except `回憶=清除=全部`
-  which works and IS covered.
+- `missing_signature` → **400** (legacy Flask raised raw `KeyError` → 500).
+- `opinion_500` → **200** with a polite reply: `意見` pushes to
+  `DEVELOPER_USER_ID` via `DEVELOPER_BOT_TOKEN` when both are set,
+  otherwise replies that feedback isn't configured. (Legacy `push_developer`
+  needed `bots['admin']`, which was never created → 500.) Same rule for the
+  `check()` error report: push when configured, else log a warning.
