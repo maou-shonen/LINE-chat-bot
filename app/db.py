@@ -1,36 +1,50 @@
-"""Storage: same MariaDB tables/columns and keyword semantics as the
-legacy app, via plain SQLAlchemy 2.x ORM. One session per event; the
-resident keyword cache is kept for now (Unit 4 drops it)."""
+"""Storage: SQLite only (WAL). Keyword matching for reply-to-all goes
+through the indexed ``anchor`` column (see app/keywords.py); the
+unchanged check() semantics in handler.py decide the winner."""
 import copy
 import json
 from datetime import datetime
 from uuid import uuid1
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, create_engine, func
+from sqlalchemy import (
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    event,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
+from .keywords import anchor_lengths, anchor_of, probe_candidates
 
-def make_engine(url, debug=False):
-    if url.startswith("sqlite"):
-        return create_engine(url)
-    return create_engine(url, pool_size=0, pool_timeout=10)
+
+def make_engine(url):
+    if not url.startswith("sqlite"):
+        raise ValueError("only sqlite DATABASE_URL is supported")
+    engine = create_engine(url)
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.close()
+
+    return engine
 
 
 class Base(DeclarativeBase):
     pass
 
 
-class NullObject:
-    def __init__(self, **argv):
-        if len(argv) > 0:
-            self.__dict__.update(argv)
-
-
 class User(Base):
     __tablename__ = "user"
     id: Mapped[str] = mapped_column(String(35), primary_key=True)
     name: Mapped[str | None] = mapped_column(String(20))
-    location: Mapped[str | None] = mapped_column(Text)
     create_on: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now())
     update_on: Mapped[datetime | None] = mapped_column(
@@ -84,6 +98,12 @@ class GroupUser(Base):
     _count: Mapped[str | None] = mapped_column(Text)
     _setting: Mapped[str | None] = mapped_column(Text)
 
+    __table_args__ = (
+        Index("ux_group_user_gid_uid",
+              func.coalesce(gid, ""), func.coalesce(uid, ""),
+              unique=True),
+    )
+
     def __init__(self, group_id, user_id):
         self.gid = group_id
         self.uid = user_id
@@ -98,23 +118,6 @@ class GroupUser(Base):
     def update(self):
         self._count = json.dumps(self.count)
         self._setting = json.dumps(self.setting)
-
-
-class Keywords(Base):
-    __tablename__ = "keywords"
-    _id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    id: Mapped[str | None] = mapped_column(String(35))
-    author: Mapped[str | None] = mapped_column(String(35))
-    keyword: Mapped[str] = mapped_column(String(128), nullable=False)
-    reply: Mapped[str] = mapped_column(Text, nullable=False)
-    _option: Mapped[str | None] = mapped_column(Text)
-
-    def _json(self):
-        if "option" not in self.__dict__:
-            self.option = json.loads(self._option)
-
-    def update(self):
-        self._option = json.dumps(self.option)
 
 
 class KeywordsLogs(Base):
@@ -140,39 +143,37 @@ class UserKeyword(Base):
     author: Mapped[str | None] = mapped_column(String(35))
     keyword: Mapped[str] = mapped_column(String(128), nullable=False)
     reply: Mapped[str] = mapped_column(Text, nullable=False)
-    super: Mapped[bool | None] = mapped_column(Boolean)
-    level: Mapped[int | None] = mapped_column(Integer)
+    anchor: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    __table_args__ = (
+        Index("ix_user_keyword_anchor", "anchor"),
+        Index("ix_user_keyword_anchor_len", func.length(anchor)),
+        Index("ux_user_keyword_id_keyword", "id", "keyword", unique=True),
+    )
 
     def __init__(self, id, author, keyword, reply):
         self.id = id
         self.author = author
         self.keyword = keyword
         self.reply = reply
-        self.super = ("**" in keyword)
-        self.level = len(keyword) - keyword.count("**") * (len("**") + 1)
+        self.anchor = anchor_of(keyword)
 
     @staticmethod
     def add_and_update(session, id, author, keyword, reply, plus=False):
-        cache = UserKeyword.get(session, id, keyword)
-        if cache is None:
+        row = session.query(UserKeyword).filter_by(
+            id=id, keyword=keyword).first()
+        if row is None:
             row = UserKeyword(id, author, keyword, reply)
             session.add(row)
             session.flush()
-            UserKeyword_cache.setdefault(id, {})[keyword] = NullObject(
-                **{k: v for k, v in row.__dict__.items()
-                   if k != "_sa_instance_state"})
         else:
-            n = cache.reply.rfind("##")
-            if n > -1 and "保護" in cache.reply[n:] and cache.author != author:
+            n = row.reply.rfind("##")
+            if n > -1 and "保護" in row.reply[n:] and row.author != author:
                 raise Exception("此關鍵字已被保護\n只有原設定者可以修改")
 
-            cache.author = author
-            cache.reply = reply + "__" + cache.reply if plus else reply
-
-            for row in session.query(UserKeyword).filter_by(
-                    id=id, keyword=keyword):
-                row.author = author
-                row.reply = reply + "__" + row.reply if plus else reply
+            row.author = author
+            row.reply = reply + "__" + row.reply if plus else reply
+            row.anchor = anchor_of(row.keyword)
 
         if id is not None:
             session.add(KeywordsLogs(id, keyword, reply))
@@ -180,45 +181,33 @@ class UserKeyword(Base):
 
     @staticmethod
     def delete(session, id, author, keyword):
-        cache = UserKeyword.get(session, id, keyword)
-        if cache is None:
+        row = session.query(UserKeyword).filter_by(
+            id=id, keyword=keyword).first()
+        if row is None:
             return False
 
-        n = cache.reply.rfind("##")
-        if n > -1 and "保護" in cache.reply[n:] and cache.author != author:
+        n = row.reply.rfind("##")
+        if n > -1 and "保護" in row.reply[n:] and row.author != author:
             raise Exception("此關鍵字已被保護\n只有原設定者可以修改")
 
-        for row in session.query(UserKeyword).filter_by(id=id, keyword=keyword):
-            session.delete(row)
-        UserKeyword_cache[id].pop(keyword)
+        session.delete(row)
         return True
 
     @staticmethod
     def get(session, id=None, keyword=None):
-        if id not in UserKeyword_cache:
-            UserKeyword_cache[id] = {}
-
         if id is None:
-            rows = []
-            for i in UserKeyword_cache.values():
-                for row in i.values():
-                    rows.append(row)
-            return rows
-        elif keyword is None:
-            return [row for row in UserKeyword_cache[id].values()]
-        else:
-            return UserKeyword_cache[id].get(keyword, None)
+            raise ValueError("reply-to-all must use probe_all_reply")
+        if keyword is None:
+            return session.query(UserKeyword).filter_by(
+                id=id).order_by(UserKeyword._id).all()
+        return session.query(UserKeyword).filter_by(
+            id=id, keyword=keyword).first()
 
-
-UserKeyword_cache: dict = {}
-
-
-def load_cache(session):
-    UserKeyword_cache.clear()
-    for row in session.query(UserKeyword):
-        UserKeyword_cache.setdefault(row.id, {})[row.keyword] = NullObject(
-            **{k: v for k, v in row.__dict__.items()
-               if k != "_sa_instance_state"})
+    @staticmethod
+    def probe_all_reply(session, message, _lengths=None):
+        if _lengths is None:
+            _lengths = anchor_lengths(session, UserKeyword)
+        return probe_candidates(session, UserKeyword, message, _lengths)
 
 
 class UserSettings(Base):
@@ -229,15 +218,33 @@ class UserSettings(Base):
     user_id: Mapped[str | None] = mapped_column(String(35))
     options: Mapped[str | None] = mapped_column(Text)
 
+    __table_args__ = (
+        Index("ux_user_settings_group_user",
+              func.coalesce(group_id, ""), func.coalesce(user_id, ""),
+              unique=True),
+    )
+
     def __init__(self, group_id, user_id):
         self.group_id = group_id
         self.user_id = user_id
         self.options = "{}"
 
     @staticmethod
+    def _lookup(session, group_id, user_id):
+        q = session.query(UserSettings)
+        if group_id is None:
+            q = q.filter(UserSettings.group_id.is_(None))
+        else:
+            q = q.filter(UserSettings.group_id == group_id)
+        if user_id is None:
+            q = q.filter(UserSettings.user_id.is_(None))
+        else:
+            q = q.filter(UserSettings.user_id == user_id)
+        return q.order_by(UserSettings._id).first()
+
+    @staticmethod
     def _get(session, group_id, user_id):
-        row = session.query(UserSettings).filter_by(
-            group_id=group_id, user_id=user_id).first()
+        row = UserSettings._lookup(session, group_id, user_id)
         if row is None:
             row = UserSettings(group_id, user_id)
             session.add(row)
@@ -289,13 +296,12 @@ class UserSettings(Base):
 
 
 class Store:
-    """Engine + per-event sessions + keyword cache for one app instance."""
+    """Engine + per-event sessions for one app instance (no resident cache)."""
 
-    def __init__(self, url, debug=False):
-        self.engine = make_engine(url, debug)
+    def __init__(self, url):
+        self.engine = make_engine(url)
         Base.metadata.create_all(self.engine)
         self.sessions = sessionmaker(bind=self.engine, expire_on_commit=False)
-        load_cache(self.sessions())
 
     def session(self):
         return self.sessions()

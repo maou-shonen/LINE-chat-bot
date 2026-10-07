@@ -14,6 +14,7 @@ from datetime import datetime
 from hashlib import md5
 
 from loguru import logger
+from sqlalchemy import func
 
 from . import services
 from .db import Group, GroupUser, User, UserKeyword, UserSettings
@@ -138,9 +139,10 @@ class EventText:
                 session.add(self.group)
             self.group._json()
 
-        self.group_data = session.query(GroupUser).filter_by(
-            gid=self.group_id, uid=self.user_id).first() \
-            if self.group_id else None
+        self.group_data = session.query(GroupUser).filter(
+            func.coalesce(GroupUser.gid, "") == (self.group_id or ""),
+            func.coalesce(GroupUser.uid, "") == (self.user_id or ""),
+        ).order_by(GroupUser._id).first() if self.group_id else None
         if self.group_id:
             if not self.group_data:
                 self.group_data = GroupUser(self.group_id, self.user_id)
@@ -293,8 +295,7 @@ class EventText:
             text["睡覺"], datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M"))
 
     def wake_up(self):
-        row = self.session.query(UserSettings).filter_by(
-            group_id=self.group_id, user_id="__sleep__").first()
+        row = UserSettings._lookup(self.session, self.group_id, "__sleep__")
         opts = {}
         if row is not None:
             opts = json.loads(row.options)
@@ -530,8 +531,10 @@ class EventText:
             return score
 
         def _get(user):
-            group_data = self.session.query(GroupUser).filter_by(
-                gid=self.group.id, uid=user.id).first()
+            group_data = self.session.query(GroupUser).filter(
+                func.coalesce(GroupUser.gid, "") == (self.group.id or ""),
+                func.coalesce(GroupUser.uid, "") == (user.id or ""),
+            ).order_by(GroupUser._id).first()
             if group_data is None:
                 group_data = GroupUser(self.group.id, user.id)
                 self.session.add(group_data)
@@ -756,7 +759,8 @@ class EventText:
                     self.message = self.message[2:].strip(" \n　")
 
                 reply_message = self.check(
-                    UserKeyword.get(self.session), all_reply=True)
+                    UserKeyword.probe_all_reply(self.session, self.message),
+                    all_reply=True)
                 if reply_message:
                     return reply_message
                 if self.group:
@@ -776,8 +780,8 @@ class EventText:
         return json.loads(row.options).get("暫停")
 
     def _sleep_row(self):
-        return self.session.query(UserSettings).filter_by(
-            group_id=self.group_id, user_id="__sleep__").first()
+        return UserSettings._lookup(
+            self.session, self.group_id, "__sleep__")
 
     def _clear_sleep_row(self):
         row = self._sleep_row()
