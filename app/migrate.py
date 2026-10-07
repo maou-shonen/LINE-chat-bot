@@ -24,27 +24,16 @@ KEPT_TABLES = ("user", "group", "group_user", "keywords_logs",
                "user_keyword", "user_settings")
 SKIPPED_TABLES = ("keywords", "message_queue", "url_shortener", "webUI")
 SAMPLE_SIZE = 2000
-
-CREATE_SQL = """
-CREATE TABLE "user" (id TEXT PRIMARY KEY, name TEXT,
-    create_on TEXT, update_on TEXT);
-CREATE TABLE "group" (_id TEXT, id TEXT PRIMARY KEY, _admin TEXT,
-    _setting TEXT, _count TEXT, create_on TEXT, update_on TEXT);
-CREATE TABLE group_user (_id INTEGER PRIMARY KEY, gid TEXT, uid TEXT,
-    _count TEXT, _setting TEXT);
-CREATE TABLE keywords_logs (_id TEXT PRIMARY KEY, id TEXT, keyword TEXT,
-    reply TEXT, create_on TEXT);
-CREATE TABLE user_keyword (_id INTEGER PRIMARY KEY, id TEXT, author TEXT,
-    keyword TEXT NOT NULL, reply TEXT NOT NULL, anchor TEXT NOT NULL);
-CREATE INDEX ix_user_keyword_anchor ON user_keyword(anchor);
-CREATE UNIQUE INDEX ux_user_keyword_id_keyword ON user_keyword(id, keyword);
-CREATE TABLE user_settings (_id INTEGER PRIMARY KEY, group_id TEXT,
-    user_id TEXT, options TEXT);
-CREATE UNIQUE INDEX ux_group_user_gid_uid
-    ON group_user(coalesce(gid, ''), coalesce(uid, ''));
-CREATE UNIQUE INDEX ux_user_settings_group_user ON user_settings(
-    coalesce(group_id, ''), coalesce(user_id, ''));
-"""
+SOURCE_COLUMNS = {
+    "user": ("id", "name", "location", "create_on", "update_on"),
+    "group": ("_id", "id", "use_on", "_admin", "_setting",
+              "_count", "news", "create_on", "update_on"),
+    "group_user": ("_id", "gid", "uid", "_count", "_setting"),
+    "keywords_logs": ("_id", "id", "keyword", "reply", "create_on"),
+    "user_keyword": ("_id", "id", "author", "keyword", "reply",
+                     "super", "level"),
+    "user_settings": ("_id", "group_id", "user_id", "options"),
+}
 
 COLUMNS = {
     "user": ("id", "name", "create_on", "update_on"),
@@ -190,28 +179,27 @@ def dedupe(rows):
 
 
 def build_db(rows):
+    from sqlalchemy import create_engine
+
+    from app.db import Base
+
     con = sqlite3.connect(":memory:")
-    con.executescript(CREATE_SQL)
+    engine = create_engine("sqlite://", creator=lambda: con)
+    Base.metadata.create_all(engine)
+    target_cols = {t: [c.name for c in Base.metadata.tables[t].columns]
+                   for t in KEPT_TABLES}
     for table in KEPT_TABLES:
-        cols = COLUMNS[table]
-        idx = {c: i for i, c in enumerate(
-            {"user": ("id", "name", "location", "create_on", "update_on"),
-             "group": ("_id", "id", "use_on", "_admin", "_setting",
-                       "_count", "news", "create_on", "update_on"),
-             "group_user": ("_id", "gid", "uid", "_count", "_setting"),
-             "keywords_logs": ("_id", "id", "keyword", "reply",
-                               "create_on"),
-             "user_keyword": ("_id", "id", "author", "keyword", "reply",
-                              "super", "level"),
-             "user_settings": ("_id", "group_id", "user_id", "options"),
-             }[table])}
+        cols = [c for c in COLUMNS[table] if c in target_cols[table]]
+        idx = {c: i for i, c in enumerate(SOURCE_COLUMNS[table])}
         for r in rows[table]:
             vals = [r[idx[c]] for c in cols]
             if table == "user_keyword":
-                vals.append(anchor_of(vals[3] or ""))
+                vals.append(anchor_of(vals[cols.index("keyword")] or ""))
             con.execute(
-                "INSERT INTO \"%s\" VALUES (%s)" % (
-                    table, ",".join("?" * len(vals))), vals)
+                "INSERT INTO \"%s\" (%s) VALUES (%s)" % (
+                    table, ",".join('"%s"' % c for c in cols + (
+                        ["anchor"] if table == "user_keyword" else [])),
+                    ",".join("?" * len(vals))), vals)
     con.commit()
     return con
 

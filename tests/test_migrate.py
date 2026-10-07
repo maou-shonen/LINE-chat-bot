@@ -153,3 +153,53 @@ def test_cli_module_entrypoint(dump_path, tmp_path):
          "--to", target], capture_output=True, text=True, cwd=".")
     assert proc.returncode == 0, proc.stderr
     assert "mismatches=0" in proc.stdout
+
+
+def test_migrated_schema_matches_store(dump_path, tmp_path):
+    import json as json_mod
+
+    from app.db import Base, Store
+
+    target = str(tmp_path / "schema.db")
+    assert migrate(dump_path, target) == 0
+    Store("sqlite:///%s" % (tmp_path / "fresh.db"))
+
+    def schema(con):
+        tables = {}
+        for (name, sql) in con.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table' "
+                "ORDER BY name").fetchall():
+            cols = [r[1] for r in con.execute(
+                'PRAGMA table_info("%s")' % name).fetchall()]
+            tables[name] = cols
+        indexes = {}
+        for (name, sql) in con.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'index' "
+                "AND sql IS NOT NULL ORDER BY name").fetchall():
+            indexes[name] = " ".join(sql.split())
+        return tables, indexes
+
+    mig_con = sqlite3.connect(target)
+    fresh_con = sqlite3.connect(str(tmp_path / "fresh.db"))
+    assert schema(mig_con) == schema(fresh_con)
+    assert set(Base.metadata.tables) == set(schema(mig_con)[0])
+    mig_con.close()
+    fresh_con.close()
+
+    for plan_sql, param in (
+            ("WITH RECURSIVE lens(n) AS ("
+             "SELECT MIN(LENGTH(anchor)) FROM user_keyword "
+             "UNION "
+             "SELECT (SELECT MIN(LENGTH(anchor)) FROM user_keyword "
+             "WHERE LENGTH(anchor) > lens.n) FROM lens "
+             "WHERE lens.n IS NOT NULL"
+             ") SELECT n FROM lens WHERE n IS NOT NULL ORDER BY n", None),
+            ("SELECT keyword FROM user_keyword WHERE anchor IN "
+             "(SELECT value FROM json_each(?))",
+             json_mod.dumps(["hello", ""]))):
+        con = sqlite3.connect(target)
+        plan = con.execute("EXPLAIN QUERY PLAN " + plan_sql,
+                           (param,) if param is not None else []).fetchall()
+        text_plan = " ".join(str(r) for r in plan)
+        assert "SCAN user_keyword" not in text_plan, text_plan
+        con.close()
