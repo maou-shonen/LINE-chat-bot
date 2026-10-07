@@ -1,0 +1,27 @@
+database:
+  url: 'sqlite:///__DB_PATH__'
+  debug: 0
+google_api_key: GOLDEN-TEST-KEY
+google.com:
+  api_key: null
+developer: U_dev_golden
+admin_line: U_dev_golden
+web_url: http://golden.invalid
+temp_dir: __RUN_DIR__
+user_agent: golden-test
+詞組:
+  自己的: [me, myself, 自己, 個人, 我]
+公告:
+  內容: golden公告
+imgur.com:
+  id: golden-id
+  secret: golden-secret
+pixiv:
+  帳號: golden
+  密碼: golden
+ehentai:
+  帳號: golden
+  密碼: golden
+opendata.cwb.gov.tw:
+  api_key: golden
+test_marker: golden-harness-v1
