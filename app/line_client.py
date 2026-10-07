@@ -104,12 +104,14 @@ class LineClient:
             messages, self.is_image_and_ready, format=format)
 
     def reply(self, reply_token, content):
-        self.client.post(self.api_base + REPLY_PATH, json={
+        r = self.client.post(self.api_base + REPLY_PATH, json={
             "replyToken": reply_token, "messages": content})
+        r.raise_for_status()
 
     def push(self, to, content):
-        self.client.post(self.api_base + PUSH_PATH, json={
+        r = self.client.post(self.api_base + PUSH_PATH, json={
             "to": to, "messages": content})
+        r.raise_for_status()
 
 
     def get_group_member_profile(self, group_id, user_id):

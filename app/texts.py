@@ -1,5 +1,5 @@
-"""UI strings + message helpers. Non-secret strings live in text.yaml;
-the `own-words` list moved here from config_example.yaml (詞組.自己的)."""
+"""UI strings + message helpers. Non-secret strings live in text.yaml,
+including the `own-words` list (自己的, from config_example.yaml 詞組.自己的)."""
 import os
 
 import yaml
@@ -15,7 +15,7 @@ def load_text(path=TEXT_PATH):
 
 text = load_text()
 
-OWN_WORDS = ["me", "my", "myself", "自己", "個人", "我"]
+OWN_WORDS = list(text["自己的"])
 
 is_text_like_list = [
     ["1", "true", "yes", "y", "on", "是", "真", "開", "開啟", "打開", "確定"],

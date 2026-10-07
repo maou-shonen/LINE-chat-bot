@@ -7,7 +7,9 @@ sessions and the typed LINE client. Only deliberate fixes differ
 DEVELOPER_USER_ID + DEVELOPER_BOT_TOKEN are set, else replies that
 feedback isn't configured; the check() error path logs instead of
 calling a nonexistent admin client."""
+import json
 import random as random_module
+import time
 from datetime import datetime
 from hashlib import md5
 
@@ -30,8 +32,6 @@ class Bot:
         return self.client.token
 
     def push(self, to, messages, reply_token=None, format=True):
-        logger.debug(self.token)
-
         if type(messages) != list:
             messages = [messages]
 
@@ -95,8 +95,8 @@ class Ctx:
         self.bots = bots
         self.line_client_factory = line_client_factory
         self.time_now = time_now or datetime.now
-        self.epoch = epoch or __import__("time").time
-        self.monotonic = monotonic or __import__("time").monotonic
+        self.epoch = epoch or time.time
+        self.monotonic = monotonic or time.monotonic
         self.developer_user_id = settings.DEVELOPER_USER_ID
         self.developer_token = settings.DEVELOPER_BOT_TOKEN
 
@@ -186,7 +186,7 @@ class EventText:
                               "愛醬出錯了！\n作者可能會察看此錯誤報告",
                               reply_token=self.reply_token)
             except Exception:
-                print("傳送失敗")
+                logger.warning("傳送失敗")
             raise e
         finally:
             session.close()
@@ -297,10 +297,10 @@ class EventText:
             group_id=self.group_id, user_id="__sleep__").first()
         opts = {}
         if row is not None:
-            opts = __import__("json").loads(row.options)
+            opts = json.loads(row.options)
         if "暫停" in opts:
             opts.pop("暫停")
-            row.options = __import__("json").dumps(opts)
+            row.options = json.dumps(opts)
             return text["睡醒"]
         else:
             return text["沒睡"]
@@ -770,22 +770,20 @@ class EventText:
             return None
 
     def _sleep_until(self):
-        import json as _json
         row = self._sleep_row()
         if row is None:
             return None
-        return _json.loads(row.options).get("暫停")
+        return json.loads(row.options).get("暫停")
 
     def _sleep_row(self):
         return self.session.query(UserSettings).filter_by(
             group_id=self.group_id, user_id="__sleep__").first()
 
     def _clear_sleep_row(self):
-        import json as _json
         row = self._sleep_row()
-        opts = _json.loads(row.options)
+        opts = json.loads(row.options)
         opts.pop("暫停", None)
-        row.options = _json.dumps(opts)
+        row.options = json.dumps(opts)
 
     def check(self, userkeyword_list, all_reply=False):
         exclude_url = all_reply and not (

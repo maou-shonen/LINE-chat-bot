@@ -297,3 +297,82 @@ def test_imgur_uses_client_id_header(tmp_path):
     assert seen["url"] == "https://api.imgur.com/3/image"
     assert seen["headers"] == {"Authorization": "Client-ID CID123"}
     assert seen["timeout"] == 10.0
+
+
+def test_callback_path_never_logged(state, caplog):
+    import logging
+
+    from loguru import logger as _logger
+
+    secret = "s3cr3t-abc"
+    token = "tok-xyz-123"
+    loguru_lines = []
+    handler_id = _logger.add(lambda m: loguru_lines.append(m))
+    try:
+        with caplog.at_level(logging.INFO, logger="uvicorn.access"):
+            resp = _post(state, _text_event(0, "說明"),
+                         secret=secret, token=token)
+        assert resp.status_code == 200
+    finally:
+        _logger.remove(handler_id)
+    # httpx logs the in-process TestClient request URL at DEBUG; that is
+    # harness traffic, not server output (prod inbound arrives on a
+    # socket, never through httpx). Scope to the server-side loggers.
+    stdlib_text = "\n".join(
+        r.getMessage() for r in caplog.records
+        if not r.name.startswith("httpx"))
+    assert secret not in stdlib_text
+    assert token not in stdlib_text
+    assert secret not in "\n".join(loguru_lines)
+    assert token not in "\n".join(loguru_lines)
+
+
+def test_access_log_filter_redacts_callback_path():
+    import logging
+
+    from app.app import _CallbackRedactFilter
+
+    f = _CallbackRedactFilter()
+    record = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:1", "POST", "/callback/s3cr3t/tok-9", "1.1", 200),
+        None)
+    assert f.filter(record) is True
+    assert record.args == (
+        "127.0.0.1:1", "POST", "/callback/***", "1.1", 200)
+    assert record.getMessage() == \
+        '127.0.0.1:1 - "POST /callback/*** HTTP/1.1" 200'
+    assert "s3cr3t" not in record.getMessage()
+    assert "tok-9" not in record.getMessage()
+    other = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:1", "GET", "/ping", "1.1", 200), None)
+    assert f.filter(other) is True
+    assert other.args == ("127.0.0.1:1", "GET", "/ping", "1.1", 200)
+    assert other.getMessage() == '127.0.0.1:1 - "GET /ping HTTP/1.1" 200'
+
+
+def test_line_reply_non_2xx_raises():
+    from app.line_client import LineClient
+
+    def _handler(request):
+        return httpx.Response(400, json={"message": "bad"})
+
+    client = LineClient("TOK123",
+                        transport=httpx.MockTransport(_handler))
+    with pytest.raises(httpx.HTTPStatusError):
+        client.reply("RT1", [{"type": "text", "text": "hi"}])
+
+
+def test_line_push_non_2xx_raises():
+    from app.line_client import LineClient
+
+    def _handler(request):
+        return httpx.Response(500, json={"message": "boom"})
+
+    client = LineClient("TOK123",
+                        transport=httpx.MockTransport(_handler))
+    with pytest.raises(httpx.HTTPStatusError):
+        client.push("U9", [{"type": "text", "text": "hi"}])
