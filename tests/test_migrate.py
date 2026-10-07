@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from app.migrate import build_db, dedupe, load_dump, migrate
+from app.migrate import build_db, dedupe, json_invalid_counts, load_dump, migrate
 
 TINY_DUMP = """-- MariaDB dump
 -- Dumping data for table `user`
@@ -15,19 +15,19 @@ TINY_DUMP = """-- MariaDB dump
 LOCK TABLES `user` WRITE;
 INSERT INTO `user` VALUES
 ('U1','Alice',NULL,'2020-01-01 00:00:00','2020-01-01 00:00:00'),
-('U2',NULL,NULL,'2020-01-01 00:00:00','2020-01-01 00:00:00');
+('U2',NULL,NULL,'2020-01-01 00:00:00','2020-01-01 00:00:01');
 -- Dumping data for table `group`
 --
 LOCK TABLES `group` WRITE;
 INSERT INTO `group` VALUES
-('g-uuid-1','C1',NULL,'{}','{}','{}',NULL,'2020-01-01 00:00:00','2020-01-01 00:00:00');
+('g-uuid-1','C1',NULL,'{}','{}','{}',NULL,'2020-01-01 00:00:00','2020-01-01 00:00:02');
 -- Dumping data for table `group_user`
 --
 LOCK TABLES `group_user` WRITE;
 INSERT INTO `group_user` VALUES
 (1,'C1','U1','{\\"a\\": 1}','{}'),
 (2,'C1','U1','{\\"a\\": 2}','{}'),
-(3,'C1',NULL,'{}','{}');
+(3,'C1',NULL,'{\\"n\\": "a\\\\nb"}','{}');
 -- Dumping data for table `keywords`
 --
 LOCK TABLES `keywords` WRITE;
@@ -35,7 +35,7 @@ LOCK TABLES `keywords` WRITE;
 --
 LOCK TABLES `keywords_logs` WRITE;
 INSERT INTO `keywords_logs` VALUES
-('l-uuid-1','C1','hi','hello','2020-01-01 00:00:00');
+('l-uuid-1','C1','hi','hello','2020-01-01 00:00:03');
 -- Dumping data for table `message_queue`
 --
 LOCK TABLES `message_queue` WRITE;
@@ -51,7 +51,7 @@ INSERT INTO `user_keyword` VALUES
 (10,'C1','U1','hello','hi',0,5),
 (11,'C1','U1','hello','hi-again',0,5),
 (12,'C1','U1','he**lo','wild',1,1),
-(13,'C1','U1','**any**','anywhere',1,1);
+(13,'C1','U1','**any**','it\\'s \\\\ fine\\nnow',1,1);
 -- Dumping data for table `user_settings`
 --
 LOCK TABLES `user_settings` WRITE;
@@ -95,6 +95,35 @@ def test_tiny_dump_counts_and_dedupe(dump_path):
     assert con.execute(
         "SELECT anchor FROM user_keyword WHERE keyword = 'he**lo'"
     ).fetchone() == ("he",)
+    assert con.execute(
+        "SELECT reply FROM user_keyword WHERE keyword = '**any**'"
+    ).fetchone() == ("it's \\ fine\nnow",)
+    assert con.execute(
+        "SELECT _count FROM group_user WHERE gid = 'C1' AND uid IS NULL"
+    ).fetchone() == ('{"n": "a\\nb"}',)
+    assert con.execute(
+        "SELECT update_on FROM \"user\" WHERE id = 'U2'").fetchone() == (
+        "2020-01-01 00:00:01",)
+    assert con.execute(
+        "SELECT update_on FROM \"group\" WHERE id = 'C1'").fetchone() == (
+        "2020-01-01 00:00:02",)
+    assert con.execute(
+        "SELECT create_on FROM keywords_logs").fetchone() == (
+        "2020-01-01 00:00:03",)
+    assert json_invalid_counts(con) == {
+        "group._admin": 0, "group._count": 0, "group._setting": 0,
+        "group_user._count": 0, "group_user._setting": 0,
+        "user_settings.options": 0}
+
+
+def test_json_gate_fails_on_invalid(dump_path):
+    rows, _ = load_dump(dump_path)
+    dedupe(rows)
+    rows["user_settings"].append(
+        ["99", "C9", "U9", "{not json"])
+    con = build_db(rows)
+    invalid = json_invalid_counts(con)
+    assert invalid["user_settings.options"] == 1
 
 
 def test_cli_idempotent_identical_counts(dump_path, tmp_path, capsys):

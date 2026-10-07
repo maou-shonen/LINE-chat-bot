@@ -147,6 +147,7 @@ class UserKeyword(Base):
 
     __table_args__ = (
         Index("ix_user_keyword_anchor", "anchor"),
+        Index("ix_user_keyword_anchor_len", func.length(anchor)),
         Index("ux_user_keyword_id_keyword", "id", "keyword", unique=True),
     )
 

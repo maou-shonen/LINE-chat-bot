@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from app.db import GroupUser, Store, UserKeyword, UserSettings
 from app.keywords import anchor_of, full_scan, probe_candidates
-from app.parity import legacy_check
+from app.parity import legacy_check, winning_set
 
 
 @pytest.fixture
@@ -66,31 +66,42 @@ def test_anchor_stored_on_write(store):
     session.close()
 
 
+def _assert_probe_parity(session, messages):
+    for msg in messages:
+        for exclude_url in (False, True):
+            want_set = winning_set(
+                msg, full_scan(session, UserKeyword),
+                all_reply=True, exclude_url=exclude_url)
+            got_set = winning_set(
+                msg, probe_candidates(session, UserKeyword, msg),
+                all_reply=True, exclude_url=exclude_url)
+            assert want_set == got_set, (msg, exclude_url)
+            seed = hash((msg, exclude_url)) & 0xFFFFFFFF
+            random.seed(seed)
+            want = legacy_check(
+                msg, full_scan(session, UserKeyword),
+                all_reply=True, exclude_url=exclude_url)
+            random.seed(seed)
+            got = legacy_check(
+                msg, probe_candidates(session, UserKeyword, msg),
+                all_reply=True, exclude_url=exclude_url)
+            assert want == got, (msg, exclude_url)
+
+
 def test_probe_parity_synthetic(seeded):
     session = seeded.session()
-    messages = ["hello", "heXXlo", "xxanyyy", "aXb", "zzz", "foo",
-                "afoo", "foobar", "@secret", "a", "",
-                "愛醬請說晚安", "abcdef", "longXXXshort"]
-    for i, msg in enumerate(messages):
-        random.seed(i)
-        want = legacy_check(msg, full_scan(session, UserKeyword))
-        random.seed(i)
-        got = legacy_check(
-            msg, probe_candidates(session, UserKeyword, msg))
-        assert want == got, msg
+    _assert_probe_parity(session, [
+        "hello", "heXXlo", "xxanyyy", "aXb", "zzz", "foo",
+        "afoo", "foobar", "@secret", "a", "",
+        "愛醬請說晚安", "abcdef", "longXXXshort"])
     session.close()
 
 
 def test_probe_parity_pin_quirk_and_at(seeded):
     session = seeded.session()
-    for i, msg in enumerate(["xhello", "hellox", "xhellox", "@secretX",
-                             "aX", "Xa", "愛醬晚安", "晚安"]):
-        random.seed(100 + i)
-        want = legacy_check(msg, full_scan(session, UserKeyword))
-        random.seed(100 + i)
-        got = legacy_check(
-            msg, probe_candidates(session, UserKeyword, msg))
-        assert want == got, msg
+    _assert_probe_parity(session, [
+        "xhello", "hellox", "xhellox", "@secretX",
+        "aX", "Xa", "愛醬晚安", "晚安"])
     session.close()
 
 
@@ -101,6 +112,22 @@ def test_probe_uses_anchor_index(seeded):
              "WHERE anchor IN (SELECT value FROM json_each(:p))"),
         {"p": json.dumps(["hello", ""])}).fetchall()
     assert any("ix_user_keyword_anchor" in str(r) for r in plan)
+    session.close()
+
+
+def test_anchor_lengths_avoids_full_scan(seeded):
+    session = seeded.session()
+    plan = session.execute(text(
+        "EXPLAIN QUERY PLAN WITH RECURSIVE lens(n) AS ("
+        "SELECT MIN(LENGTH(anchor)) FROM user_keyword "
+        "UNION "
+        "SELECT (SELECT MIN(LENGTH(anchor)) FROM user_keyword "
+        "WHERE LENGTH(anchor) > lens.n) FROM lens "
+        "WHERE lens.n IS NOT NULL"
+        ") SELECT n FROM lens WHERE n IS NOT NULL ORDER BY n")).fetchall()
+    text_plan = " ".join(str(r) for r in plan)
+    assert "ix_user_keyword_anchor_len" in text_plan
+    assert "SCAN user_keyword" not in text_plan
     session.close()
 
 

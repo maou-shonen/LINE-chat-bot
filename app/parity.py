@@ -3,20 +3,20 @@
 Copied from handler.EventText.check semantics: the winner selection,
 level ranking, random tie order, 全回應 path (leading @ exclusion,
 single-char reply exclusion), and the first/last-char pin quirk.
-Kept in sync with app/handler.py by tests/test_parity_vs_handler.py,
-which runs both against the same synthetic keyword set.
+Kept in sync with app/handler.py by tests/test_keywords.py, which
+asserts check() source still carries the split('**') loop and no
+anchor reference.
 """
 import random as random_module
 
 
-def legacy_check(message, rows, all_reply=False, group=None,
-                 session=None, full_image=True):
-    from app.db import UserSettings
-    exclude_url = all_reply and not (
-        not group or UserSettings.get(
-            session, group.id, None, "全圖片", default=False)
-        if session is not None and full_image else full_image)
+def winning_set(message, rows, all_reply=True, exclude_url=False):
+    """Full candidate WINNING set (before the seeded random choice).
 
+    Returns the exact-match list when non-empty, else the top-level
+    list, else []. Mirrors legacy_check below without consuming
+    random state, so parity compares sets, not one random draw.
+    """
     keys = []
     result = []
 
@@ -36,14 +36,14 @@ def legacy_check(message, rows, all_reply=False, group=None,
             if all_reply:
                 result.append(row_reply)
             else:
-                return row_reply
+                return [row_reply]
         elif row.keyword.replace("**", "") == message:
             result.append(row_reply)
         elif not all_reply or len(row_reply) > 1:
             keys.append((row.keyword, row_reply))
 
     if len(result) > 0:
-        return random_module.choice(result)
+        return sorted(result)
 
     results = {}
     result_level = -99
@@ -72,6 +72,15 @@ def legacy_check(message, rows, all_reply=False, group=None,
             results[level].append(v)
 
     if len(results) > 0:
-        return random_module.choice(results[result_level])
+        return sorted(results[result_level])
 
-    return None
+    return []
+
+
+def legacy_check(message, rows, all_reply=False, exclude_url=False):
+    win = winning_set(message, rows, all_reply, exclude_url)
+    if not win:
+        return None
+    if not all_reply and len(win) == 1:
+        return win[0]
+    return random_module.choice(win)

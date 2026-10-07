@@ -9,7 +9,7 @@ can never match, and the probe is a strict superset filter.
 """
 import json
 
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 
 
 def anchor_of(keyword):
@@ -21,9 +21,15 @@ def anchor_of(keyword):
 
 
 def anchor_lengths(session, model):
-    rows = session.execute(
-        select(func.distinct(func.length(model.anchor)))).all()
-    return sorted(r[0] for r in rows if r[0])
+    rows = session.execute(text(
+        "WITH RECURSIVE lens(n) AS ("
+        "SELECT MIN(LENGTH(anchor)) FROM user_keyword "
+        "UNION "
+        "SELECT (SELECT MIN(LENGTH(anchor)) FROM user_keyword "
+        "WHERE LENGTH(anchor) > lens.n) FROM lens "
+        "WHERE lens.n IS NOT NULL"
+        ") SELECT n FROM lens WHERE n IS NOT NULL ORDER BY n")).all()
+    return [r[0] for r in rows if r[0]]
 
 
 def probe_candidates(session, model, message, lengths=None):
