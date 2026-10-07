@@ -1,16 +1,15 @@
 import requests
 import threading
 from time import time
-from random import choice, randint, random, uniform, sample
-from datetime import datetime, timedelta
+from random import choice, random, uniform, sample
+from datetime import datetime
 from hashlib import md5
 
 from api import *
 from loguru import logger
-from database import db, UserKeyword, UserSettings, MessageQueue, WebUI
-from other import google_shorten_url, ehentai_search, exhentai_search, google_search
+from database import db, UserKeyword, UserSettings
 from LineBot import bots, push_developer
-from module import * #google_safe_browsing
+from module import *
 
 #未整理
 UserSettings_temp = ConfigFile('.UserSettings_temp.tmp')
@@ -117,17 +116,12 @@ class EventText(threading.Thread):
             reply_message = self.index()
             t1 = time() - t0
 
-            #公告
             if reply_message is None:
                 reply_message = []
             elif type(reply_message) == str:
                 reply_message = [reply_message]
-             
-            if not self.bot:
-                if self.group:
-                    for message in reply_message:
-                        MessageQueue.add(self.group.id, message)
-            else:
+
+            if self.bot:
                 if self.bot.push(self.group.id if self.group else self.user.id, reply_message, reply_token=self.reply_token):
                     t2 = time() - t1 - t0
                     logger.info('%s < %s %s' % (uid, reply_message, '(%dms, %dms)' % (t1*1000, t2*1000)))
@@ -182,10 +176,6 @@ class EventText(threading.Thread):
 
         if self.order in ['-?', '-h', 'help', '說明', '指令', '命令']:
             return text['指令說明']
-        elif self.order in ['公告']:
-            return self.push()
-        elif self.order in ['-w', 'web', '網頁設定', '網頁設置']:
-            return self.web()
         elif self.order in ['-l', 'list', '列表']:
             return self.list()
         elif self.order in ['-a', 'add', 'keyword', '新增', '關鍵字', '學習']:
@@ -196,35 +186,8 @@ class EventText(threading.Thread):
             return self.delete()
         elif self.order in ['-o', 'opinion', '意見', '建議', '回報', '檢舉']:
             return self.opinion()
-        elif self.order in ['google', 'goo']:
-            return self.google()
-        elif self.order in []: #'飆車'
-            return self.bt()
-        elif self.order in []: #'停車'
-            return self.bt_stop()
-        elif self.order in ['e-hentai', 'ehentai', 'e變態']:
-            return self.ehentai()
-        elif self.order in ['exhentai', 'ex變態']:
-            return self.exhentai()
-        elif self.order in ['pixiv', '#pixiv', 'p網', '#p網']:
-            return self.pixiv()
-        elif self.order in ['weather', '天氣']:
-            return self.weather()
         else:
             return self.main()
-
-
-    def push(self):
-        if self.user_id != cfg['developer']:
-            return cfg['公告']['內容']
-        if self.value is None:
-            return '參數錯誤\n[公告=對象id or all=內容]'
-        if self.key == 'all':
-            for g in Group.query.all():
-                MessageQueue.add(g.id, '<愛醬公告 %s>\n詳細說明 goo.gl/KutKhs\n%s' % (datetime.now().strftime('%m%d.%H'), self.value))
-        else:
-            MessageQueue.add(self.key, '<開發者回覆>\n' + self.value)
-        return 'ok'
 
 
     def sleep(self):
@@ -250,22 +213,6 @@ class EventText(threading.Thread):
             return text['沒睡']
 
 
-    def web(self):
-        '''
-            網頁設定
-        '''
-        if not self.user:
-            return text['權限不足']
-
-        if self.group:
-            u = WebUI.query.get(self.user.id)
-            if not u:
-                u = WebUI(self.user.id)
-                db.session.add(u)
-            u.setGroup(self.group.id, 60*30)
-            return '%s\n授權操作此群組30分鐘' % (cfg['web_url'])
-        else:
-            return cfg['web_url']
 
 
     def list(self):
@@ -284,7 +231,6 @@ class EventText(threading.Thread):
             reply_message.append('「列表=我」查詢自己')
             reply_message.append('\n'.join([k.keyword for k in UserKeyword.get(self.group.id)]))
 
-        reply_message.append('\n\n使用「網頁設定」更好操作')
         return '\n'.join(reply_message)
 
 
@@ -369,9 +315,8 @@ class EventText(threading.Thread):
             n = self.value.rfind('##')
             if n > -1 and '保護' in self.value[n:]:
                 reply_message.append('\n(此為保護關鍵字 只有你可以刪除及修改 為了避免爭議 建議不要濫用)')
-            
-        return ''.join(reply_message) \
-            + '\n\n使用「網頁設定」更好操作'
+
+        return ''.join(reply_message)
 
 
     def add_plus(self):
@@ -410,8 +355,7 @@ class EventText(threading.Thread):
         except Exception as e:
             return '刪除失敗: %s' % str(e)
             
-        return ''.join(reply_message) if len(reply_message) > 1 else '喵喵喵? 愛醬不記得<%s>' % (self.key) \
-            + '\n\n使用「網頁設定」更好操作'
+        return ''.join(reply_message) if len(reply_message) > 1 else '喵喵喵? 愛醬不記得<%s>' % (self.key)
 
 
     def opinion(self):
@@ -668,76 +612,6 @@ class EventText(threading.Thread):
             '「回憶=清除=<名字>」　清除群組某人的對話次數紀錄 (無法復原)',
         ])
 
-    def google(self):
-        '''
-            google搜尋
-        '''
-        if self.key is None:
-            return text['google說明']
-
-        self._count({'觸發':1}) #紀錄次數
-
-        return google_search(self.message[self.message.find('=')+1:])
-
-
-    def bt(self):
-        '''
-            BT直播功能
-        '''
-        return '目前此功能關閉'
-
-
-    def bt_stop(self):
-        '''
-            BT直播功能 停止
-        '''
-        return '目前此功能關閉'
-
-
-    def ehentai(self):
-        '''
-            E變態搜尋
-        '''
-        if self.key is None:
-            return text['ehentai說明']
-
-        self._count({'觸發':1}) #紀錄次數
-
-        return ehentai_search(self.key)
-
-
-    def exhentai(self):
-        '''
-            EX變態搜尋
-        '''
-        if self.key is None:
-            return text['exhentai說明']
-
-        self._count({'觸發':1}) #紀錄次數
-
-        return exhentai_search(self.key)
-
-    def pixiv(self):
-        if self.order[0] == '#':
-            if self.key is None:
-                return text['pixiv#說明']
-            return pixiv.rss(self.key)
-        else:
-            if self.key is None:
-                return text['pixiv說明']
-            return pixiv.search(self.key, self.value if self.value is not None and self.value.isdigit() else 30)
-
-
-    def weather(self):
-        try:
-            weather = get_weather(self.user, self.key)
-
-            self._count({'觸發':1}) #紀錄次數
-
-            return weather
-        except Exception as e:
-            raise Exception('天氣查詢失敗: %s' % str(e))
-
 
     def main(self):
         '''
@@ -747,8 +621,6 @@ class EventText(threading.Thread):
             if self.group:
                 self._count({'網頁':1}) #紀錄次數
                 return google_safe_browsing(self.message)
-            else:
-                return google_shorten_url(self.message) #短網址
 
         self.message = self.message.lower().strip(' \n') #調整內容 以增加觸發命中率
         self._count({
@@ -760,10 +632,6 @@ class EventText(threading.Thread):
         if self.message == '':
             return None
         
-        #暫存訊息 用於對話模型訓練
-        #if self.group:
-        #    with open('E:\\bot_log\\%s.log' % self.group_id, 'a+', encoding='utf-8') as f:
-        #        f.write(self.message + '\n')
 
         #愛醬開頭可以強制呼叫
         if self.group:

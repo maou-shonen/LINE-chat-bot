@@ -1,11 +1,9 @@
 import json
-from time import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from uuid import uuid1
-from api import cfg, get_id
+from api import cfg
 from app import app
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.dialects.mysql import MEDIUMTEXT
 
 
 app.config['SQLALCHEMY_DATABASE_URI'] = cfg['database']['url']
@@ -289,83 +287,6 @@ class UserSettings(db.Model):
             data.append('無 (預設)')
 
         return '\n'.join(data)
-
-
-
-###################################
-#   訊息隊列
-class MessageQueue(db.Model):
-    _id       = db.Column(db.String(36), primary_key=True)
-    id        = db.Column(db.String(35))
-    message   = db.Column(db.TEXT)
-    create_on = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    
-    def __init__(self, id, message):
-        self._id = str(uuid1())
-        self.id = id
-        self.message = message
-
-    @staticmethod
-    def add(id, message):
-        row = MessageQueue(id, message)
-        db.session.add(row)
-
-    @staticmethod
-    def get(id, message):
-        if id is None or len(message) >= 5:
-            return message
-
-        for row in MessageQueue.query.filter_by(id=id).order_by(MessageQueue._id):
-            row.pushed = False
-            db.session.delete(row)
-
-            message.append(row.message)
-            if len(message) >= 5:
-                break
-        
-        return message
-
-
-
-###################################
-#   WebUI
-class WebUI(db.Model):
-    uid         = db.Column(db.String(35), primary_key=True)
-    gid         = db.Column(db.String(35))
-    gid_timeout = db.Column(db.DateTime(timezone=True))
-    create_on   = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-    #update_on  = db.Column(db.DateTime(timezone=True))
-
-    def __init__(self, uid):
-        self.uid  = uid
-
-    def setGroup(self, gid, timeout):
-        self.gid = gid
-        self.gid_timeout = datetime.now() + timedelta(seconds=timeout)
-
-
-
-###################################
-#   短連結
-class UrlShortener(db.Model):
-    id        = db.Column(db.String(7), primary_key=True)
-    url       = db.Column(db.TEXT)
-    create_on = db.Column(db.DateTime(timezone=True), server_default=db.func.now())
-
-    def __init__(self, url):
-        self.url  = url
-        self.id = get_id()
-
-    def get(self):
-        return '%s/l/%s' % (cfg['web_url'], self.id)
-
-    @staticmethod
-    def add(url):
-        if not 'http' in url:
-            return '<無效網址>'
-        row = UrlShortener(url)
-        db.session.add(row)
-        return row.get()
 
 
 

@@ -60,8 +60,7 @@ uv venv --python 3.8 .venv-golden
 uv pip install --python .venv-golden/bin/python \
   Flask==2.0.1 Flask-SQLAlchemy==2.5.1 SQLAlchemy==1.4.22 \
   line-bot-sdk==1.20.0 requests==2.26.0 PyYAML==5.4.1 \
-  loguru==0.5.3 beautifulsoup4==4.9.3 lxml==4.6.3 \
-  imgurpython==1.1.7 "pixivpy==3.6.0" PyMySQL==1.0.2 \
+  loguru==0.5.3 imgurpython==1.1.7 PyMySQL==1.0.2 \
   pytz==2021.1 pytest
 ```
 
@@ -81,7 +80,6 @@ SQLite's NullPool).
 - `意見` (feedback) → **500**: `push_developer` needs `bots['admin']`,
   which is never created. Same for any `check()` exception path
   (`bots['admin'].send_message` doesn't exist either).
-- `天氣` / `pixiv` / `回憶=清除=<name>` paths → **500** in this env
-  (dead CWB endpoint, removed `PixivAPI` login, `GroupUser` name lookup
-  raising); intentionally NOT in scenarios — dead features per the brief,
-  except `回憶=清除=全部` which works and IS covered.
+- `回憶=清除=<name>` path → **500** in this env (`GroupUser` name lookup
+  raising); intentionally NOT in scenarios, except `回憶=清除=全部`
+  which works and IS covered.

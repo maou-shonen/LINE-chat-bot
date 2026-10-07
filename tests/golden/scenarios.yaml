@@ -538,7 +538,7 @@ scenarios:
     text: look http://evil.invalid/ here
     safe_browsing: threat
 
-  - name: shortener_disabled_11
+  - name: url_11_fallthrough
     kind: text
     source: {kind: user, id: U_dm, user: U_dm}
     text: http://example.com/x
@@ -568,17 +568,17 @@ scenarios:
     source: {kind: group, id: C_learn, user: U_own}
     text: 意見=hello feedback
 
-  - name: web_settings
+  - name: web_settings_fallthrough
     kind: text
     source: {kind: group, id: C_all, user: U_own}
     text: 網頁設定
 
-  - name: announce
+  - name: announce_fallthrough
     kind: text
     source: {kind: group, id: C_all, user: U_own}
     text: 公告
 
-  - name: google_disabled
+  - name: google_fallthrough
     kind: text
     source: {kind: group, id: C_all, user: U_own}
     text: google=hello
