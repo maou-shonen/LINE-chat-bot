@@ -1,27 +1,10 @@
 import os
 import yaml
-import requests
-from time import time, sleep
 
 cfg  = yaml.safe_load(open('config.yaml', 'r', encoding='utf-8-sig'))
 text = yaml.safe_load(open('text.yaml', 'r', encoding='utf-8-sig'))
 
 DEBUG = os.environ.get('debug', 'False') in ['True', 'true']
-
-
-def download(url, file_path, timeout=30):
-    response = requests.get(url, stream=True, timeout=timeout)
-
-    with open(file_path, "wb") as handle:
-        for data in response.iter_content():
-            handle.write(data)
-
-
-def isValueHaveKeys(value, keys):
-    for key in keys:
-        if key in value:
-            return True
-    return False
 
 
 def isFloat(s):
@@ -30,20 +13,6 @@ def isFloat(s):
         return True
     except:
         return False
-
-
-#############################################
-# 產生一個較短的唯一ID
-def get_id():
-    num = '1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-    size = len(num)
-    sleep(0.01)
-    t = int((time() - 1500000000) * 100)
-    v = []
-    while t >= len(num):
-        v.insert(0, num[int(t%size)])
-        t = int(t / size)
-    return ''.join(v)
 
 
 #############################################

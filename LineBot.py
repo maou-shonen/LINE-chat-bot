@@ -1,8 +1,6 @@
 from time import sleep
-import requests.exceptions
+import requests
 from api import cfg
-from app import app
-from database import db, MessageQueue
 from linebot import LineBotApi
 from linebot.exceptions import LineBotApiError
 from linebot.models import TextMessage, ImageSendMessage, TextSendMessage
@@ -52,12 +50,6 @@ class LineBot(LineBotApi):
         self.token = token
         self.can_push = push #push權限
 
-    def __message_queue(self, to, messages):
-        print(messages)
-        for message in messages:
-            row = MessageQueue(to, message)
-            db.session.add(row)
-
     def __message_format(self, messages, format=True):
         if type(messages) == str:
             messages = [messages]
@@ -99,8 +91,6 @@ class LineBot(LineBotApi):
         if type(messages) != list:
             messages = [messages]
 
-        messages = MessageQueue.get(to, messages)
-
         if len(messages) == 0:
             return False
 
@@ -130,9 +120,6 @@ class LineBot(LineBotApi):
                 else:
                     logger.warning('傳送失敗 to=%s messages=%s' % (to, messages))
             return True
-
-        #queue
-        #self.__message_queue(to, messages)
 
         return False
 

@@ -6,7 +6,7 @@
         "rt-0",
         [
           {
-            "text": "「說明」(本說明)\n「學習=<關鍵字>=<內容>」\n「刪除=<關鍵字>」\n「列表」\n「網頁設定」\n「設定=<功能>=<開關/值>」(群)\n「意見=<內容>」\n「回憶」(群)\n「愛醬睡覺」(群)\n「愛醬起床」(群)\n「天氣」\n「google、e變態、ex變態」\n\n<>代表可以省略\n省略後可以查詢說明\n(群)代表群組限定\n\n※如果使用愛醬攻擊別人產生問題\n依照LINE官方紀錄為主處理\n※作者絕對不會儲存你的對話內容\n但不建議你在需要保密的地方使用\n詳細說明 goo.gl/xMtima",
+            "text": "「說明」(本說明)\n「學習=<關鍵字>=<內容>」\n「刪除=<關鍵字>」\n「列表」\n「設定=<功能>=<開關/值>」(群)\n「意見=<內容>」\n「回憶」(群)\n「愛醬睡覺」(群)\n「愛醬起床」(群)\n\n<>代表可以省略\n省略後可以查詢說明\n(群)代表群組限定\n\n※如果使用愛醬攻擊別人產生問題\n依照LINE官方紀錄為主處理\n※作者絕對不會儲存你的對話內容\n但不建議你在需要保密的地方使用\n詳細說明 goo.gl/xMtima",
             "type": "text"
           }
         ]
@@ -814,7 +814,7 @@
         "rt-39",
         [
           {
-            "text": "「列表=我」查詢自己\npre**\n**suf\n**both**\na**b\n\n\n使用「網頁設定」更好操作",
+            "text": "「列表=我」查詢自己\npre**\n**suf\n**both**\na**b",
             "type": "text"
           }
         ]
@@ -830,7 +830,7 @@
         "rt-40",
         [
           {
-            "text": "現在群組中預設不使用個人詞庫\n有需要請用「設定」開啟\n\n\n\n使用「網頁設定」更好操作",
+            "text": "現在群組中預設不使用個人詞庫\n有需要請用「設定」開啟",
             "type": "text"
           }
         ]
@@ -2023,13 +2023,13 @@
         "rt-99",
         [
           {
-            "text": "此功能現在沒有開放喵",
+            "text": "指令說明輸入「說明」\n<個人服務>\n直接傳給愛醬網址即可產生短網址\n直接傳圖給愛醬即可上傳到圖床\n其他功能如果有建議請使用「回報」",
             "type": "text"
           }
         ]
       ]
     ],
-    "name": "shortener_disabled_11",
+    "name": "url_11_fallthrough",
     "status": 200
   },
   {
@@ -2102,51 +2102,18 @@
     "status": 500
   },
   {
-    "calls": [
-      [
-        "reply",
-        "rt-105",
-        [
-          {
-            "text": "http://golden.invalid\n授權操作此群組30分鐘",
-            "type": "text"
-          }
-        ]
-      ]
-    ],
-    "name": "web_settings",
+    "calls": [],
+    "name": "web_settings_fallthrough",
     "status": 200
   },
   {
-    "calls": [
-      [
-        "reply",
-        "rt-106",
-        [
-          {
-            "text": "golden公告",
-            "type": "text"
-          }
-        ]
-      ]
-    ],
-    "name": "announce",
+    "calls": [],
+    "name": "announce_fallthrough",
     "status": 200
   },
   {
-    "calls": [
-      [
-        "reply",
-        "rt-107",
-        [
-          {
-            "text": "此功能暫時關閉",
-            "type": "text"
-          }
-        ]
-      ]
-    ],
-    "name": "google_disabled",
+    "calls": [],
+    "name": "google_fallthrough",
     "status": 200
   },
   {

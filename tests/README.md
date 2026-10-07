@@ -81,7 +81,6 @@ SQLite's NullPool).
 - `意見` (feedback) → **500**: `push_developer` needs `bots['admin']`,
   which is never created. Same for any `check()` exception path
   (`bots['admin'].send_message` doesn't exist either).
-- `天氣` / `pixiv` / `回憶=清除=<name>` paths → **500** in this env
-  (dead CWB endpoint, removed `PixivAPI` login, `GroupUser` name lookup
-  raising); intentionally NOT in scenarios — dead features per the brief,
-  except `回憶=清除=全部` which works and IS covered.
+- `回憶=清除=<name>` path → **500** in this env (`GroupUser` name lookup
+  raising); intentionally NOT in scenarios, except `回憶=清除=全部`
+  which works and IS covered.

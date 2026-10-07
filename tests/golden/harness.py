@@ -37,8 +37,6 @@ Determinism: `random.seed` is reset before every scenario step, and
 dependent outputs (sleep-until timestamps, `##種子` day buckets) are captured
 as-is into the golden file; they are stable for a fixed run only insofar as
 the scenario pins them — the sleep test asserts shape, not the exact hour.
-The one deliberate nondeterminism source (`api.get_id` sleeps 10ms and uses
-time) is never hit: ` UrlShortener` paths are dead in covered scenarios.
 
 DB-visible effects: the harness exposes `db_state()` (keyword rows, settings,
 counters) so scenarios can assert via `expect_db` without touching SQL.
