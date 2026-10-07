@@ -316,8 +316,7 @@ class EventText(threading.Thread):
             if n > -1 and '保護' in self.value[n:]:
                 reply_message.append('\n(此為保護關鍵字 只有你可以刪除及修改 為了避免爭議 建議不要濫用)')
 
-        return ''.join(reply_message) \
-            + '\n\n使用「網頁設定」更好操作'
+        return ''.join(reply_message)
 
 
     def add_plus(self):
@@ -356,8 +355,7 @@ class EventText(threading.Thread):
         except Exception as e:
             return '刪除失敗: %s' % str(e)
             
-        return ''.join(reply_message) if len(reply_message) > 1 else '喵喵喵? 愛醬不記得<%s>' % (self.key) \
-            + '\n\n使用「網頁設定」更好操作'
+        return ''.join(reply_message) if len(reply_message) > 1 else '喵喵喵? 愛醬不記得<%s>' % (self.key)
 
 
     def opinion(self):
