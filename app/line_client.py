@@ -2,7 +2,10 @@
 the endpoints the bot uses: reply, push, group/room member profile,
 message content. Message shaping (text vs image, truncation, 5-message
 cap) matches the legacy LineBot exactly."""
+import ipaddress
+import socket
 from collections import OrderedDict
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -14,6 +17,43 @@ CONTENT_PATH = "/v2/bot/message/{message_id}/content"
 
 IMAGE_CONTENT_TYPES = ("image/jpeg", "image/png")
 HEAD_CACHE_SIZE = 4096
+HEAD_TIMEOUT = 5.0
+
+
+def _default_resolver(host, port):
+    return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+
+
+def _host_is_public(host, resolver):
+    try:
+        infos = resolver(host, 443)
+    except Exception:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            if not ipaddress.ip_address(info[4][0]).is_global:
+                return False
+        except ValueError:
+            return False
+    return True
+
+
+def probe_allowed(url, resolver):
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme != "https" or not parts.hostname:
+        return False
+    if parts.username or parts.password:
+        return False
+    try:
+        return ipaddress.ip_address(parts.hostname).is_global
+    except ValueError:
+        pass
+    return _host_is_public(parts.hostname, resolver)
 
 
 def repair_image_url(message):
@@ -77,7 +117,7 @@ def format_messages(messages, is_image_and_ready, format=True):
 class LineClient:
     def __init__(self, token, api_base="https://api.line.me",
                  data_api_base="https://api-data.line.me", timeout=10.0,
-                 transport=None):
+                 transport=None, resolver=None):
         self.token = token
         self.api_base = api_base.rstrip("/")
         self.data_api_base = data_api_base.rstrip("/")
@@ -86,14 +126,23 @@ class LineClient:
             transport=transport,
             headers={"Authorization": "Bearer %s" % token},
         )
+        self.probe_client = httpx.Client(
+            timeout=HEAD_TIMEOUT,
+            transport=transport,
+            follow_redirects=False,
+        )
+        self.resolver = resolver or _default_resolver
         self.head_cache: OrderedDict[str, str | None] = HeadCache()
 
     def is_image_and_ready(self, url):
         try:
             if url in self.head_cache:
                 ct = self.head_cache[url]
+            elif not probe_allowed(url, self.resolver):
+                return False
             else:
-                ct = self.client.head(url).headers.get("content-type")
+                ct = self.probe_client.head(
+                    url).headers.get("content-type")
                 self.head_cache.set(url, ct)
             return ct in IMAGE_CONTENT_TYPES
         except Exception:
