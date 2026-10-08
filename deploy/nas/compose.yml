@@ -1,9 +1,10 @@
 # NAS stack: /volume2/docker/stacks/line-chat-bot
 # Ingress: cloudflared reaches this service at http://line-chat-bot:8000.
 # Setup: chmod 600 .env; mkdir data && chown 1026:100 data
-# One-shot migrate BEFORE cutover (~3+ min on the real dump):
-#   docker compose run --rm -v /path/to/dump:/in:ro migrate \
-#     python -m app.migrate --from-dump /in/<file> --to /data/line.db
+# One-shot migrate BEFORE cutover (needs ~300 MiB; the migrate service
+# below has no mem_limit so the 256m of the server never applies to it):
+#   docker compose --profile migrate run --rm -v /path/to/dump:/in:ro migrate \
+#     python -m app.migrate --from-dump /in/<file> --to /data/line.db [--parity-sample 200]
 # Health: container HEALTHCHECK probes /ping (see Dockerfile);
 # the migrate helper disables it (no server is running there).
 

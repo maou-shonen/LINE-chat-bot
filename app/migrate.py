@@ -312,16 +312,18 @@ def json_invalid_counts(con):
     return invalid
 
 
-def migrate(source, target):
+def migrate(source, target, parity_sample=SAMPLE_SIZE):
     rows, source_counts = load_dump(source)
     report = dedupe(rows)
     con = build_db(rows)
     target_counts = {t: con.execute(
         "SELECT COUNT(*) FROM \"%s\"" % t).fetchone()[0] for t in KEPT_TABLES}
     invalid = json_invalid_counts(con)
-    messages = sample_messages(con)
-    mismatches, matched = parity_check(con, messages)
-
+    if parity_sample > 0:
+        messages = sample_messages(con, parity_sample)
+        mismatches, matched = parity_check(con, messages)
+    else:
+        messages, mismatches, matched = [], 0, 0
     fd, tmp = tempfile.mkstemp(
         suffix=".db", prefix=".migrate-", dir=os.path.dirname(
             os.path.abspath(target)))
@@ -350,8 +352,11 @@ def migrate(source, target):
         "user_keyword"]["case_variants"])
     lines.append("json invalid: %s" % ", ".join(
         "%s=%d" % (k, invalid[k]) for k in sorted(invalid)))
-    lines.append("parity messages=%d matched=%d mismatches=%d" % (
-        len(messages), matched, mismatches))
+    if parity_sample > 0:
+        lines.append("parity messages=%d matched=%d mismatches=%d" % (
+            len(messages), matched, mismatches))
+    else:
+        lines.append("parity skipped")
     print("\n".join(lines))
     return 1 if mismatches or any(invalid.values()) else 0
 
@@ -361,11 +366,13 @@ def main(argv=None):
         description="mysqldump -> SQLite one-shot migration")
     parser.add_argument("--from-dump", required=True)
     parser.add_argument("--to", required=True)
+    parser.add_argument("--parity-sample", type=int, default=SAMPLE_SIZE)
     args = parser.parse_args(argv)
     if not os.path.exists(args.from_dump):
         print("dump not found: %s" % args.from_dump, file=sys.stderr)
         return 2
-    return migrate(args.from_dump, args.to)
+    return migrate(args.from_dump, args.to,
+                   parity_sample=args.parity_sample)
 
 
 if __name__ == "__main__":
