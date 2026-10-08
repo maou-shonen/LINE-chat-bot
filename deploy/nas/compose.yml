@@ -2,9 +2,10 @@
 # Ingress: cloudflared reaches this service at http://line-chat-bot:8000.
 # Setup: chmod 600 .env; mkdir data && chown 1026:100 data
 # One-shot migrate BEFORE cutover (~3+ min on the real dump):
-#   docker compose run --rm -v /path/to/dump:/in:ro line-chat-bot \
+#   docker compose run --rm -v /path/to/dump:/in:ro migrate \
 #     python -m app.migrate --from-dump /in/<file> --to /data/line.db
-# Health: container HEALTHCHECK probes /ping (see Dockerfile).
+# Health: container HEALTHCHECK probes /ping (see Dockerfile);
+# the migrate helper disables it (no server is running there).
 
 services:
   line-chat-bot:
@@ -26,7 +27,19 @@ services:
     mem_limit: 256m
     networks:
       - public
-
+  migrate:
+    image: ghcr.io/maou-shonen/line-chat-bot:migrate
+    profiles: ["migrate"]
+    user: "1026:100"
+    env_file: .env
+    environment:
+      TZ: Asia/Taipei
+    volumes:
+      - ./data:/data
+    healthcheck:
+      disable: true
+    networks:
+      - public
 networks:
   public:
     external: true
