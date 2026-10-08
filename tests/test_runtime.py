@@ -74,6 +74,10 @@ def _make_state(monkeypatch, tmp_path, **settings_kw):
         client.client = orig_client(
             timeout=10.0, transport=transport,
             headers={"Authorization": "Bearer %s" % token})
+        client.probe_client = orig_client(
+            timeout=5.0, transport=transport, follow_redirects=False)
+        client.resolver = lambda host, port: [
+            (2, 1, 6, "", ("93.184.216.34", port))]
         return client
 
     state.ctx.line_client_factory = _mock_factory
@@ -271,6 +275,63 @@ def test_callback_non_dict_event_skipped(state):
     assert resp.text == "ok"
 
 
+def _learned_reply(state, group, key="x"):
+    from app.db import UserKeyword
+
+    session = state.store.session()
+    try:
+        row = UserKeyword.get(session, group, key)
+        return row.reply if row else None
+    finally:
+        session.close()
+
+
+def test_learn_collapses_value_pipes(state):
+    resp = _post(state, _text_event(10, "學習=x=a|||b", user="Upipe",
+                                    group="Gpipe"))
+    assert resp.status_code == 200
+    assert _learned_reply(state, "Gpipe") == "a||b"
+
+
+def test_learn_collapses_value_underscores(state):
+    resp = _post(state, _text_event(11, "學習=x=a_____b", user="Uunder",
+                                    group="Gunder"))
+    assert resp.status_code == 200
+    assert _learned_reply(state, "Gunder") == "a__b"
+
+
+def test_learn_separator_key_terminates(state):
+    import threading
+
+    done = []
+
+    def _run():
+        resp = _post(state, _text_event(12, "學習=||||=a|||b",
+                                        user="Usep1", group="Gsep1"))
+        done.append(resp.status_code)
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join(timeout=20)
+    assert done == [200]
+    assert _learned_reply(state, "Gsep1", key="||||") == "a||b"
+
+
+def test_learn_underscore_key_terminates(state):
+    import threading
+
+    done = []
+
+    def _run():
+        resp = _post(state, _text_event(13, "學習=____=x___y",
+                                        user="Usep2", group="Gsep2"))
+        done.append(resp.status_code)
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join(timeout=20)
+    assert done == [200]
+    assert _learned_reply(state, "Gsep2", key="____") == "x__y"
 def _loguru_lines(level):
     from loguru import logger as _logger
 
@@ -409,6 +470,81 @@ def test_head_cache_bounded(tmp_path):
     assert "https://example.com/0.jpg" not in cache
     assert "https://example.com/4999.jpg" in cache
 
+
+def _public_resolver(host, port):
+    return [(2, 1, 6, "", ("93.184.216.34", port))]
+
+
+def _private_resolver(host, port):
+    return [(2, 1, 6, "", ("192.168.88.250", port))]
+
+
+def _mixed_resolver(host, port):
+    return [(2, 1, 6, "", ("93.184.216.34", port)),
+            (2, 1, 6, "", ("10.0.0.9", port))]
+
+
+def test_probe_sends_no_authorization(tmp_path):
+    from app.line_client import LineClient
+    seen = {}
+
+    def _handler(request):
+        seen["auth"] = request.headers.get("authorization")
+        seen["blob"] = repr(sorted(request.headers.items()))
+        return httpx.Response(
+            200, headers={"content-type": "image/jpeg"})
+
+    client = LineClient("TOK-PROBE-SECRET",
+                        transport=httpx.MockTransport(_handler),
+                        resolver=_public_resolver)
+    assert client.is_image_and_ready("https://example.com/a.jpg") is True
+    assert seen["auth"] is None
+    assert "TOK-PROBE-SECRET" not in seen["blob"]
+
+
+def test_probe_refuses_non_public_without_request(tmp_path):
+    from app.line_client import LineClient
+    hits = []
+
+    def _handler(request):
+        hits.append(str(request.url))
+        return httpx.Response(
+            200, headers={"content-type": "image/jpeg"})
+
+    transport = httpx.MockTransport(_handler)
+    for url, resolver in [
+            ("https://internal.example/1.jpg", _private_resolver),
+            ("https://127.0.0.1/2.jpg", _public_resolver),
+            ("https://192.168.88.250/3.jpg", _public_resolver),
+            ("https://[::1]/4.jpg", _public_resolver),
+            ("https://[fe80::1]/5.jpg", _public_resolver),
+            ("https://169.254.169.254/6.jpg", _public_resolver),
+            ("https://203.0.113.7/7.jpg", _public_resolver),
+            ("https://[2001:db8::1]/8.jpg", _public_resolver),
+            ("https://[::ffff:10.0.0.1]/9.jpg", _public_resolver),
+            ("https://mixed.example/10.jpg", _mixed_resolver),
+            ("https://user:pass@example.com/11.jpg", _public_resolver),
+            ("http://example.com/12.jpg", _public_resolver)]:
+        client = LineClient("TOK123", transport=transport,
+                            resolver=resolver)
+        assert client.is_image_and_ready(url) is False, url
+    assert hits == []
+
+
+def test_probe_does_not_follow_redirect(tmp_path):
+    from app.line_client import LineClient
+    hits = []
+
+    def _handler(request):
+        hits.append(str(request.url))
+        return httpx.Response(
+            302, headers={"location": "https://example.com/b.jpg"})
+
+    client = LineClient("TOK123",
+                        transport=httpx.MockTransport(_handler),
+                        resolver=_public_resolver)
+    assert client.is_image_and_ready("https://example.com/a.jpg") is False
+    assert hits == ["https://example.com/a.jpg"]
 
 def test_imgur_uses_client_id_header(tmp_path):
     import app.services as services_mod

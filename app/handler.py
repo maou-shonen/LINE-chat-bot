@@ -9,6 +9,7 @@ feedback isn't configured; the check() error path logs instead of
 calling a nonexistent admin client."""
 import json
 import random as random_module
+import re
 import time
 from datetime import datetime
 from hashlib import md5
@@ -373,10 +374,8 @@ class EventText:
 
         self._count({"調教": 1})
 
-        while "|||" in self.value:
-            self.value = self.key.replace("|||", "||")
-        while "___" in self.value:
-            self.value = self.key.replace("___", "__")
+        self.value = re.sub(r"\|{3,}", "||", self.value)
+        self.value = re.sub(r"_{3,}", "__", self.value)
 
         ban_key = ["**", "** **", "愛醬**", "**愛醬**"]
         if self.key in ban_key:
