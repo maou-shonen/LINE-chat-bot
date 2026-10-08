@@ -192,6 +192,64 @@ def test_queue_ordering(state):
     kinds = [c[1] for c in state._calls]
     assert kinds == ["rt-0", "rt-1"]
 
+def _learned_reply(state, group, key="x"):
+    from app.db import UserKeyword
+
+    session = state.store.session()
+    try:
+        row = UserKeyword.get(session, group, key)
+        return row.reply if row else None
+    finally:
+        session.close()
+
+
+def test_learn_collapses_value_pipes(state):
+    resp = _post(state, _text_event(10, "學習=x=a|||b", user="Upipe",
+                                    group="Gpipe"))
+    assert resp.status_code == 200
+    assert _learned_reply(state, "Gpipe") == "a||b"
+
+
+def test_learn_collapses_value_underscores(state):
+    resp = _post(state, _text_event(11, "學習=x=a_____b", user="Uunder",
+                                    group="Gunder"))
+    assert resp.status_code == 200
+    assert _learned_reply(state, "Gunder") == "a__b"
+
+
+def test_learn_separator_key_terminates(state):
+    import threading
+
+    done = []
+
+    def _run():
+        resp = _post(state, _text_event(12, "學習=||||=a|||b",
+                                        user="Usep1", group="Gsep1"))
+        done.append(resp.status_code)
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join(timeout=20)
+    assert done == [200]
+    assert _learned_reply(state, "Gsep1", key="||||") == "a||b"
+
+
+def test_learn_underscore_key_terminates(state):
+    import threading
+
+    done = []
+
+    def _run():
+        resp = _post(state, _text_event(13, "學習=____=x___y",
+                                        user="Usep2", group="Gsep2"))
+        done.append(resp.status_code)
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join(timeout=20)
+    assert done == [200]
+    assert _learned_reply(state, "Gsep2", key="____") == "x__y"
+
 def _loguru_lines(level):
     from loguru import logger as _logger
 
