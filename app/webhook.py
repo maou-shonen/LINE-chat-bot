@@ -59,11 +59,11 @@ def process_event(app_state, event):
     elif etype == "follow":
         ctx.get_bot(token).push(
             to=ids["user_id"], reply_token=event.get("replyToken"),
-            messages=text["加入好友"])
+            messages=text["加入好友"], source="user")
     elif etype == "join":
         ctx.get_bot(token).push(
             to=ids["group_id"], reply_token=event.get("replyToken"),
-            messages=text["加入群組"])
+            messages=text["加入群組"], source="group")
     elif etype in ("unfollow", "leave", "postback"):
         pass
 
@@ -77,7 +77,9 @@ async def consumer(app_state):
         try:
             await asyncio.to_thread(process_event, app_state, item)
         except Exception as e:
-            logger.warning("event failed: %s" % e)
+            logger.warning("event failed type=%s error=%s" % (
+                item.get("type"), type(e).__name__))
+            logger.debug("event failed: %s" % e)
         finally:
             app_state.queue.task_done()
 

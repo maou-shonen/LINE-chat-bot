@@ -188,6 +188,73 @@ def test_queue_ordering(state):
     kinds = [c[1] for c in state._calls]
     assert kinds == ["rt-0", "rt-1"]
 
+def _loguru_lines(level):
+    from loguru import logger as _logger
+
+    lines = []
+    handler_id = _logger.add(
+        lambda m: lines.append(m.record["message"]),
+        level=level, format="{message}")
+    return lines, handler_id
+
+
+def test_text_event_info_hides_content(state):
+    from loguru import logger as _logger
+
+    user = "UhideMe99"
+    secret_text = "極機密訊息-alpha-beta"
+    lines, handler_id = _loguru_lines("INFO")
+    try:
+        resp = _post(state, _text_event(0, secret_text, user=user))
+        assert resp.status_code == 200
+    finally:
+        _logger.remove(handler_id)
+    blob = "\n".join(lines)
+    assert secret_text not in blob
+    assert user not in blob
+    assert "text source=user matched=yes count=" in blob
+
+
+def test_text_event_debug_shows_content(state):
+    from loguru import logger as _logger
+
+    secret_text = "極機密訊息-gamma-delta"
+    lines, handler_id = _loguru_lines("DEBUG")
+    try:
+        resp = _post(state, _text_event(1, secret_text, user="Udbg7"))
+        assert resp.status_code == 200
+    finally:
+        _logger.remove(handler_id)
+    blob = "\n".join(lines)
+    assert secret_text in blob
+    assert "text source=user matched=yes count=" in blob
+
+
+def test_send_failure_warning_hides_content(state, monkeypatch):
+    from loguru import logger as _logger
+
+    from app.line_client import LineClient
+
+    user = "Ufail42"
+    secret_text = "送不出去的機密-zeta"
+
+    def _boom(self, reply_token, content):
+        raise RuntimeError("reply down: %s" % secret_text)
+
+    monkeypatch.setattr(LineClient, "reply", _boom)
+
+    lines, handler_id = _loguru_lines("WARNING")
+    try:
+        resp = _post(state, _text_event(2, secret_text, user=user))
+        assert resp.status_code == 200
+    finally:
+        _logger.remove(handler_id)
+    blob = "\n".join(lines)
+    assert secret_text not in blob
+    assert user not in blob
+    assert "傳送失敗 source=user count=" in blob
+    assert "RuntimeError" in blob
+
 
 def test_line_reply_request_shape(tmp_path):
     from app.line_client import LineClient

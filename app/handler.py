@@ -21,6 +21,11 @@ from .db import Group, GroupUser, User, UserKeyword, UserSettings
 from .texts import OWN_WORDS, is_text_like, isFloat, text, text2bool, text_format
 
 
+def _error_status(e):
+    status = getattr(getattr(e, "response", None), "status_code", None)
+    return " status=%s" % status if status is not None else ""
+
+
 class Bot:
     """Per-token sender bound to one LINE channel access token."""
 
@@ -32,7 +37,7 @@ class Bot:
     def token(self):
         return self.client.token
 
-    def push(self, to, messages, reply_token=None, format=True):
+    def push(self, to, messages, reply_token=None, format=True, source=None):
         if type(messages) != list:
             messages = [messages]
 
@@ -44,8 +49,10 @@ class Bot:
             try:
                 self.client.reply(reply_token, content)
                 return True
-            except Exception:
-                logger.warning("傳送失敗 to=%s messages=%s" % (to, content))
+            except Exception as e:
+                logger.warning("傳送失敗 source=%s count=%d%s error=%s" % (
+                    source, len(content), _error_status(e), type(e).__name__))
+                logger.debug("傳送失敗 content=%s" % (content,))
                 return False
 
         elif self.can_push:
@@ -54,8 +61,10 @@ class Bot:
                     messages.pop(0), format=format)
                 try:
                     self.client.push(to, content)
-                except Exception:
-                    logger.warning("傳送失敗 to=%s messages=%s" % (to, messages))
+                except Exception as e:
+                    logger.warning("傳送失敗 source=%s count=1%s error=%s" % (
+                        source, _error_status(e), type(e).__name__))
+                    logger.debug("傳送失敗 content=%s" % (content,))
             return True
 
         return False
@@ -183,10 +192,13 @@ class EventText:
             try:
                 if not push_developer(
                         self.ctx, "<愛醬BUG>\n%s" % str(e)):
-                    logger.warning("error report not configured: %s" % e)
+                    logger.warning("error report not configured error=%s" % (
+                        type(e).__name__))
+                    logger.debug("error report not configured: %s" % e)
                 self.bot.push(self.group.id,
                               "愛醬出錯了！\n作者可能會察看此錯誤報告",
-                              reply_token=self.reply_token)
+                              reply_token=self.reply_token,
+                              source="group" if self.group else "user")
             except Exception:
                 logger.warning("傳送失敗")
             raise e
@@ -197,10 +209,8 @@ class EventText:
         _time = self.ctx.monotonic
 
         if self.message:
-            uid = "%s%s" % (
-                self.user_id[1:5] if self.user_id else self.user_id,
-                "@%s" % self.group_id if self.group else "")
-            logger.info("%s > %s" % (uid, self.message))
+            source = "group" if self.group else "user"
+            logger.debug("text message=%s" % (self.message,))
 
             t0 = _time()
             reply_message = self.index()
@@ -211,14 +221,24 @@ class EventText:
             elif type(reply_message) == str:
                 reply_message = [reply_message]
 
+            n = len(reply_message)
             if self.bot:
                 if self.bot.push(
                         self.group.id if self.group else self.user.id,
-                        reply_message, reply_token=self.reply_token):
+                        reply_message, reply_token=self.reply_token,
+                        source=source):
                     t2 = _time() - t1 - t0
-                    logger.info("%s < %s %s" % (
-                        uid, reply_message,
-                        "(%dms, %dms)" % (t1 * 1000, t2 * 1000)))
+                    logger.debug("text reply=%s" % (reply_message,))
+                    logger.info("text source=%s matched=yes count=%d (%dms, %dms)" % (
+                        source, n, t1 * 1000, t2 * 1000))
+                else:
+                    logger.debug("text reply=%s" % (reply_message,))
+                    logger.info("text source=%s matched=no count=%d (%dms)" % (
+                        source, n, t1 * 1000))
+            else:
+                logger.debug("text reply=%s" % (reply_message,))
+                logger.info("text source=%s matched=no count=%d (%dms)" % (
+                    source, n, t1 * 1000))
 
         elif self.sticker:
             reply_message = []
@@ -236,7 +256,8 @@ class EventText:
                 except Exception as e:
                     content = str(e)
                 self.bot.push(self.user.id, content,
-                              reply_token=self.reply_token, format=False)
+                              reply_token=self.reply_token, format=False,
+                              source="user")
 
         if self.user:
             try:
@@ -849,7 +870,8 @@ class EventText:
                         result_level = level
                     results[level].append(v)
             except Exception as e:
-                logger.warning("check error: %s" % e)
+                logger.warning("check error error=%s" % type(e).__name__)
+                logger.debug("check error: %s" % e)
                 raise e
 
         if len(results) > 0:
