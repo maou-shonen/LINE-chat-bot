@@ -150,6 +150,11 @@ class Harness:
             client.client = orig_client(
                 timeout=10.0, transport=mock_transport,
                 headers={"Authorization": "Bearer %s" % token})
+            client.probe_client = orig_client(
+                timeout=5.0, transport=mock_transport,
+                follow_redirects=False)
+            client.resolver = lambda host, port: [
+                (2, 1, 6, "", ("93.184.216.34", port))]
             return client
 
         state.ctx.line_client_factory = _mock_factory
