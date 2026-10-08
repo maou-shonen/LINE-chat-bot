@@ -17,7 +17,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 
-from app.keywords import anchor_of  # noqa: E402
+from app.keywords import PROBE_MESSAGE_LIMIT, anchor_of  # noqa: E402
 from app.parity import legacy_check, winning_set  # noqa: E402
 
 KEPT_TABLES = ("user", "group", "group_user", "keywords_logs",
@@ -231,7 +231,7 @@ class _Row:
 
 
 def _probe_rows(con, msg, lengths):
-    if len(msg) <= 300:
+    if len(msg) <= PROBE_MESSAGE_LIMIT:
         subs = {""}
         for L in lengths:
             if not L or L > len(msg):
