@@ -1,0 +1,32 @@
+# NAS stack: /volume2/docker/stacks/line-chat-bot
+# Ingress: cloudflared reaches this service at http://line-chat-bot:8000.
+# Setup: chmod 600 .env; mkdir data && chown 1026:100 data
+# One-shot migrate BEFORE cutover (~3+ min on the real dump):
+#   docker compose run --rm -v /path/to/dump:/in:ro line-chat-bot \
+#     python -m app.migrate --from-dump /in/<file> --to /data/line.db
+# Health: container HEALTHCHECK probes /ping (see Dockerfile).
+
+services:
+  line-chat-bot:
+    container_name: line-chat-bot
+    # Pin to sha-<short> or digest for prod.
+    image: ghcr.io/maou-shonen/line-chat-bot:migrate
+    user: "1026:100"
+    env_file: .env
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Taipei
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    mem_limit: 256m
+    networks:
+      - public
+
+networks:
+  public:
+    external: true
