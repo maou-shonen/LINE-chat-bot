@@ -211,3 +211,44 @@ def test_handler_check_unchanged_against_parity(seeded):
     src = inspect.getsource(handler_mod.EventText.check)
     assert "anchor" not in src
     assert "k.split(\"**\")" in src or "k.split('**')" in src
+
+def _long_messages(seed):
+    rng = random.Random(seed)
+    alphabet = "的一是不了人我在有他這中大來上國個hello "
+    out = []
+    for n in (1000, 5000):
+        body = "".join(rng.choice(alphabet) for _ in range(n))
+        out.append(body)
+        for kw in ("hello", "晚安", "longXXXshort"):
+            for pos in (0, max(0, n - len(kw))):
+                out.append(body[:pos] + kw + body[pos + len(kw):])
+    return out
+
+
+def test_probe_parity_long_messages(seeded):
+    session = seeded.session()
+    _assert_probe_parity(session, _long_messages(7))
+    session.close()
+
+
+def test_probe_parity_long_messages_other_seed(seeded):
+    session = seeded.session()
+    _assert_probe_parity(session, _long_messages(99))
+    session.close()
+
+
+def test_long_path_streams_anchors(seeded):
+    session = seeded.session()
+    plan = session.execute(
+        text("EXPLAIN QUERY PLAN SELECT DISTINCT anchor FROM user_keyword")
+    ).fetchall()
+    assert any(
+        "ix_user_keyword_anchor" in str(r) for r in plan)
+    from app import keywords as kw_mod
+    assert kw_mod.PROBE_MESSAGE_LIMIT == 300
+    rng = random.Random(7)
+    msg = "".join(rng.choice("ab的一") for _ in range(301))
+    assert [r._id for r in probe_candidates(session, UserKeyword, msg)] == [
+        r._id for r in kw_mod._streamed_candidates(
+            session, UserKeyword, msg)]
+    session.close()
