@@ -16,6 +16,7 @@ services:
     user: "1026:100"
     env_file: .env
     restart: unless-stopped
+    stop_grace_period: 30s
     environment:
       TZ: Asia/Taipei
     volumes:

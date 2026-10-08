@@ -184,6 +184,57 @@ def test_ack_before_processing(state, monkeypatch):
     _drain(state)
     assert done == ["rt-0"]
 
+def test_shutdown_drain_timeout_bounded(tmp_path, monkeypatch):
+    import asyncio
+
+    from loguru import logger as _logger
+
+    import app.app as app_mod
+    from app.app import create_app
+    from app.settings import Settings
+
+    async def _stuck(app_state):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(app_mod, "consumer", _stuck)
+    monkeypatch.setattr(app_mod, "DRAIN_TIMEOUT", 0.05)
+    monkeypatch.setattr(app_mod, "CONSUMER_STOP_TIMEOUT", 0.05)
+    settings = Settings(
+        DATABASE_URL="sqlite:///%s" % (tmp_path / "drain.db"))
+    fastapi_app = create_app(settings=settings)
+    state = fastapi_app.state.app_state
+
+    async def _enter_exit():
+        ctx = fastapi_app.router.lifespan_context(fastapi_app)
+        await ctx.__aenter__()
+        state.queue.put_nowait({"type": "message"})
+        t0 = time.monotonic()
+        await ctx.__aexit__(None, None, None)
+        return time.monotonic() - t0
+
+    lines, handler_id = _loguru_lines("WARNING")
+    try:
+        elapsed = asyncio.run(_enter_exit())
+    finally:
+        _logger.remove(handler_id)
+    assert elapsed < 5.0
+    assert "shutdown drain timeout dropped=1" in "\n".join(lines)
+
+
+def test_error_reply_sent_in_direct_chat(state, monkeypatch):
+    import app.handler as handler_mod
+
+    def _boom(self):
+        raise RuntimeError("forced failure")
+
+    monkeypatch.setattr(handler_mod.EventText, "index", _boom)
+    resp = _post(state, _text_event(20, "boom", user="U11"))
+    assert resp.status_code == 200
+    kinds = [c[0] for c in state._calls]
+    assert kinds == ["reply"]
+    assert state._calls[0][1] == "rt-20"
+    texts = [m.get("text", "") for m in state._calls[0][2]]
+    assert any("愛醬出錯了" in t for t in texts)
 
 def test_queue_ordering(state):
     for n, word in enumerate(["說明", "列表"]):
@@ -191,6 +242,38 @@ def test_queue_ordering(state):
         assert resp.status_code == 200
     kinds = [c[1] for c in state._calls]
     assert kinds == ["rt-0", "rt-1"]
+
+
+def _post_raw(state, body, secret=SECRET, token=TOKEN):
+    sig = base64.b64encode(hmac.new(
+        secret.encode(), body.encode(), hashlib.sha256).digest()).decode()
+    resp = state._tc.post(
+        "/callback/%s/%s" % (secret, token), content=body,
+        headers={"Content-Type": "application/json",
+                 "X-Line-Signature": sig})
+    _drain(state)
+    return resp
+
+
+def test_callback_non_object_body_ok(state):
+    for body in ("[]", '"x"', "1"):
+        resp = _post_raw(state, body)
+        assert resp.status_code == 200
+        assert resp.text == "ok"
+
+
+def test_callback_non_list_events_ok(state):
+    resp = _post_raw(state, '{"destination":"U1","events":{}}')
+    assert resp.status_code == 200
+    assert resp.text == "ok"
+
+
+def test_callback_non_dict_event_skipped(state):
+    resp = _post_raw(
+        state, '{"destination":"U1","events":[1,"x",null]}')
+    assert resp.status_code == 200
+    assert resp.text == "ok"
+
 
 def _learned_reply(state, group, key="x"):
     from app.db import UserKeyword
@@ -249,7 +332,6 @@ def test_learn_underscore_key_terminates(state):
     t.join(timeout=20)
     assert done == [200]
     assert _learned_reply(state, "Gsep2", key="____") == "x__y"
-
 def _loguru_lines(level):
     from loguru import logger as _logger
 

@@ -190,6 +190,15 @@ def test_parity_sample_zero_keeps_json_gate(dump_path, tmp_path):
     assert migrate(bad, target, parity_sample=0) == 1
 
 
+def test_parity_sample_negative_rejected(dump_path, tmp_path):
+    from app.migrate import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--from-dump", dump_path, "--to",
+              str(tmp_path / "neg.db"), "--parity-sample", "-1"])
+    assert exc.value.code == 2
+
+
 def test_migrated_schema_matches_store(dump_path, tmp_path):
     import json as json_mod
 

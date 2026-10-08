@@ -16,6 +16,9 @@ from .line_client import LineClient
 from .settings import Settings
 from .webhook import consumer, make_routes
 
+DRAIN_TIMEOUT = 20.0
+CONSUMER_STOP_TIMEOUT = 5.0
+
 
 class AppState:
     def __init__(self, settings=None):
@@ -69,9 +72,16 @@ def create_app(settings=None, state=None):
     async def lifespan(app: FastAPI):
         task = asyncio.create_task(consumer(app_state))
         yield
-        await app_state.queue.join()
+        try:
+            await asyncio.wait_for(app_state.queue.join(), DRAIN_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("shutdown drain timeout dropped=%d" % (
+                app_state.queue.qsize(),))
         await app_state.queue.put(None)
-        await task
+        try:
+            await asyncio.wait_for(task, CONSUMER_STOP_TIMEOUT)
+        except asyncio.TimeoutError:
+            task.cancel()
 
     app = FastAPI(lifespan=lifespan)
     app.state.app_state = app_state

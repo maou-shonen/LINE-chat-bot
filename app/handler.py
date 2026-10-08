@@ -196,10 +196,17 @@ class EventText:
                     logger.warning("error report not configured error=%s" % (
                         type(e).__name__))
                     logger.debug("error report not configured: %s" % e)
-                self.bot.push(self.group.id,
-                              "愛醬出錯了！\n作者可能會察看此錯誤報告",
-                              reply_token=self.reply_token,
-                              source="group" if self.group else "user")
+                if self.group:
+                    target = self.group.id
+                elif self.user:
+                    target = self.user.id
+                else:
+                    target = None
+                if target is not None:
+                    self.bot.push(target,
+                                  "愛醬出錯了！\n作者可能會察看此錯誤報告",
+                                  reply_token=self.reply_token,
+                                  source="group" if self.group else "user")
             except Exception:
                 logger.warning("傳送失敗")
             raise e

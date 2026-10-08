@@ -97,9 +97,16 @@ def make_routes(app_state):
             payload = await request.json()
         except Exception:
             payload = {}
+        if not isinstance(payload, dict):
+            return Response("ok")
         ctx = app_state.ctx
         ctx.get_bot(token)
-        for event in payload.get("events", []):
+        events = payload.get("events", [])
+        if not isinstance(events, list):
+            return Response("ok")
+        for event in events:
+            if not isinstance(event, dict):
+                continue
             event["_bot_token"] = token
             await app_state.queue.put(event)
         return Response("ok")
