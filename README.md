@@ -2,6 +2,17 @@
 只是一個LINE的聊天機器人  
 附帶一些其他功能
 
+## 執行 / 部署
+```sh
+cp .env.example .env  # 填好再跑
+uv run uvicorn main:app --host 0.0.0.0 --port 8000
+# docker: docker build -t line-chat-bot . && docker run --rm -v ./data:/data --env-file .env line-chat-bot
+# 遷移舊庫: docker run --rm -v /path/to/dump:/in:ro -v ./data:/data line-chat-bot \
+#   python -m app.migrate --from-dump /in/<dump>.sql.gz --to /data/line.db
+# NAS 見 deploy/nas/compose.yml（stack: /volume2/docker/stacks/line-chat-bot）
+```
+
+
 ## 2020.07.18
 ```
 舊的壞掉了  

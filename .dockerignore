@@ -1,0 +1,14 @@
+.git
+config.yaml
+.env*
+*.db*
+*.sql*
+*.gz
+dumps
+.venv*
+__pycache__
+.pytest_cache
+.ruff_cache
+tests/golden/.run
+access/
+images/
