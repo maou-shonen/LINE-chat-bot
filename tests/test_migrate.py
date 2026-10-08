@@ -155,6 +155,41 @@ def test_cli_module_entrypoint(dump_path, tmp_path):
     assert "mismatches=0" in proc.stdout
 
 
+def test_parity_sample_zero_skips(dump_path, tmp_path, capsys):
+    target = str(tmp_path / "skip.db")
+    assert migrate(dump_path, target, parity_sample=0) == 0
+    out = capsys.readouterr().out
+    assert "parity skipped" in out
+    assert "mismatches=" not in out
+    con = sqlite3.connect(target)
+    assert con.execute(
+        "SELECT COUNT(*) FROM user_keyword").fetchone() == (3,)
+    con.close()
+
+
+def test_parity_sample_small_reports_count(dump_path, tmp_path, capsys):
+    target = str(tmp_path / "small.db")
+    assert migrate(dump_path, target, parity_sample=2) == 0
+    out = capsys.readouterr().out
+    assert "parity messages=2 matched=" in out
+    assert "mismatches=0" in out
+
+
+def test_parity_sample_zero_keeps_json_gate(dump_path, tmp_path):
+    import gzip as gzip_mod
+
+    bad = str(tmp_path / "bad.sql.gz")
+    with gzip_mod.open(dump_path, "rt", encoding="utf8") as f:
+        content = f.read()
+    old = "(20,'C1','U1','{\\\"x\\\": true}')"
+    assert old in content
+    content = content.replace(old, "(20,'C1','U1','{not json}')")
+    with gzip_mod.open(bad, "wt", encoding="utf8") as f:
+        f.write(content)
+    target = str(tmp_path / "bad.db")
+    assert migrate(bad, target, parity_sample=0) == 1
+
+
 def test_migrated_schema_matches_store(dump_path, tmp_path):
     import json as json_mod
 
