@@ -47,6 +47,7 @@ jobs:
             type=raw,value=sha-{{sha}},enable=true
           labels: |
             org.opencontainers.image.source=https://github.com/maou-shonen/LINE-chat-bot
+      - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
           context: .
