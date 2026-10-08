@@ -368,6 +368,8 @@ def main(argv=None):
     parser.add_argument("--to", required=True)
     parser.add_argument("--parity-sample", type=int, default=SAMPLE_SIZE)
     args = parser.parse_args(argv)
+    if args.parity_sample is not None and args.parity_sample < 0:
+        parser.error("--parity-sample must be >= 0")
     if not os.path.exists(args.from_dump):
         print("dump not found: %s" % args.from_dump, file=sys.stderr)
         return 2
