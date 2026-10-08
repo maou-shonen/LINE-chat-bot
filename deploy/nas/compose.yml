@@ -11,7 +11,7 @@ services:
   line-chat-bot:
     container_name: line-chat-bot
     # Pin to sha-<short> or digest for prod.
-    image: ghcr.io/maou-shonen/line-chat-bot:migrate
+    image: &bot-image ghcr.io/maou-shonen/line-chat-bot:migrate
     user: "1026:100"
     env_file: .env
     restart: unless-stopped
@@ -28,18 +28,14 @@ services:
     networks:
       - public
   migrate:
-    image: ghcr.io/maou-shonen/line-chat-bot:migrate
+    image: *bot-image
     profiles: ["migrate"]
     user: "1026:100"
-    env_file: .env
-    environment:
-      TZ: Asia/Taipei
     volumes:
       - ./data:/data
     healthcheck:
       disable: true
-    networks:
-      - public
+    network_mode: none
 networks:
   public:
     external: true
