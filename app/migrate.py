@@ -230,6 +230,26 @@ class _Row:
         self.reply = reply
 
 
+def _probe_rows(con, msg, lengths):
+    if len(msg) <= 300:
+        subs = {""}
+        for L in lengths:
+            if not L or L > len(msg):
+                continue
+            for j in range(len(msg) - L + 1):
+                subs.add(msg[j:j + L])
+    else:
+        subs = {""}
+        for (anchor,) in con.execute("SELECT DISTINCT anchor FROM user_keyword"):
+            if anchor and anchor in msg:
+                subs.add(anchor)
+    got_rows = con.execute(
+        "SELECT keyword, reply FROM user_keyword WHERE anchor IN "
+        "(SELECT value FROM json_each(?)) ORDER BY _id",
+        (json.dumps(sorted(subs), ensure_ascii=False),)).fetchall()
+    return [_Row(k, r) for k, r in got_rows]
+
+
 def parity_check(con, messages):
     rows = [_Row(k, r) for k, r in con.execute(
         "SELECT keyword, reply FROM user_keyword ORDER BY _id").fetchall()]
@@ -246,17 +266,7 @@ def parity_check(con, messages):
     mismatches = 0
     matched = 0
     for msg in messages:
-        subs = {""}
-        for L in lengths:
-            if not L or L > len(msg):
-                continue
-            for j in range(len(msg) - L + 1):
-                subs.add(msg[j:j + L])
-        got_rows = con.execute(
-            "SELECT keyword, reply FROM user_keyword WHERE anchor IN "
-            "(SELECT value FROM json_each(?)) ORDER BY _id",
-            (json.dumps(sorted(subs), ensure_ascii=False),)).fetchall()
-        got_rows = [_Row(k, r) for k, r in got_rows]
+        got_rows = _probe_rows(con, msg, lengths)
         for exclude_url in (False, True):
             want_set = winning_set(
                 msg, rows, all_reply=True, exclude_url=exclude_url)
