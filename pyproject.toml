@@ -2,7 +2,7 @@
 name = "line-chat-bot"
 version = "1.0.0"
 description = "LINE keyword bot (FastAPI on CPython 3.13)"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn>=0.30",
