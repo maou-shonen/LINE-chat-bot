@@ -1,8 +1,11 @@
 __pycache__
 *.pyc
+.pytest_cache
 
 .vscode
 .venv
+.venv-golden
+tests/golden/.run
 *.tmp
 
 config.yaml

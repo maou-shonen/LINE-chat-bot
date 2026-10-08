@@ -1,0 +1,593 @@
+# Golden scenarios: DATA driving the legacy webhook, in order, on one shared DB.
+# Each step posts one LINE event to POST /callback/<secret>/<token> (or a raw
+# HTTP check) and captures outbound reply/push payloads plus key DB effects.
+#
+# Step fields:
+#   name:      unique id, also used as golden key
+#   kind:      text | sticker | image | follow | unfollow | join | leave |
+#              postback | ping | bad_signature | missing_signature
+#   source:    {kind: group|room|user, id: <group/room id>, user: <user id>}
+#              (text/sticker/image only)
+#   text:      message text (text only)
+#   head_map:  {url: content-type} overrides for image HEAD checks (this step)
+#   random_org: [ints] served back for random.org multi-draw (this step)
+#   safe_browsing: clean | threat (this step; group URL path only)
+#   seed:      random.seed before the step (default 1)
+#   db:        [keywords | settings | counts] DB slices captured after the step
+#
+# Reply-token values are synthetic per step (rt-<n>); the golden file stores
+# the recorded (kind, target, messages) tuples where kind is reply|push and
+# messages are the exact as_json_dict() payloads sent toward LINE.
+#
+# NOTE on time: 愛醬安靜 replies embed a local sleep-until timestamp, so the
+# golden records it as captured. It is the only wall-clock value in goldens.
+
+defaults:
+  seed: 1
+  safe_browsing: clean
+
+scenarios:
+  - name: help_11
+    kind: text
+    source: {kind: user, id: U_help, user: U_help}
+    text: 說明
+    db: [keywords]
+
+  - name: learn_group
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: 學習=hi问候=helloReply
+    db: [keywords]
+
+  - name: trigger_exact_group
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: hi问候
+
+  - name: learn_query_hit
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: 學習=hi问候
+
+  - name: learn_query_miss
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: 學習=沒有這個鍵
+
+  - name: learn_help
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: 學習
+
+  - name: wildcard_trailing
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: 學習=pre**=WV
+
+  - name: wildcard_trailing_hit
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: preYY
+
+  - name: wildcard_trailing_miss
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: xxpreYY
+
+  - name: wildcard_leading
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: 學習=**suf=WS
+
+  - name: wildcard_leading_hit
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: xxsuf
+
+  - name: wildcard_leading_miss
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: sufxx
+
+  - name: wildcard_both
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: 學習=**both**=WB
+
+  - name: wildcard_both_hit
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: xxbothyy
+
+  - name: wildcard_middle
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: 學習=a**b=AB
+
+  - name: wildcard_middle_hit
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: axxb
+
+  - name: wildcard_middle_miss
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: zaxxb
+
+  - name: random_learn
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: 學習=rnd=aa__bb
+
+  - name: weight_learn
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: 學習=wtp=a%2__b%1
+
+  - name: weight_draw
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: wtp
+
+  - name: multidraw_learn
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: 學習=mdraw2**=v1__v2__v3
+
+  - name: multidraw_2
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: mdraw2*2
+    random_org: [1, 2]
+
+  - name: pity_learn
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: 學習=pity1=a__*b__**c##保底=1
+
+  - name: pity_draw
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: pity1
+
+  - name: seed_learn
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: 學習=seed1=x__y##種子=24
+
+  - name: seed_draw
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: seed1
+
+  - name: percent_learn
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: 學習=pct=p__q##百分比=2
+
+  - name: percent_draw
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: pct
+
+  - name: split_learn
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: 學習=md=k1||k2
+
+  - name: split_draw
+    kind: text
+    source: {kind: group, id: C_rand, user: U_own}
+    text: md
+
+  - name: protect_learn
+    kind: text
+    source: {kind: group, id: C_prot, user: U_own}
+    text: 學習=pk1=secret##保護
+
+  - name: protect_modify_denied
+    kind: text
+    source: {kind: group, id: C_prot, user: U_other}
+    text: 學習=pk1=hack
+
+  - name: protect_delete_denied
+    kind: text
+    source: {kind: group, id: C_prot, user: U_other}
+    text: 刪除=pk1
+
+  - name: protect_delete_owner
+    kind: text
+    source: {kind: group, id: C_prot, user: U_own}
+    text: 刪除=pk1
+    db: [keywords]
+
+  - name: learn_plus_base
+    kind: text
+    source: {kind: group, id: C_plus, user: U_own}
+    text: 學習+=wt2=base
+
+  - name: learn_plus_extra
+    kind: text
+    source: {kind: group, id: C_plus, user: U_own}
+    text: 學習+=wt2=extra
+    db: [keywords]
+
+  - name: learn_plus_draw
+    kind: text
+    source: {kind: group, id: C_plus, user: U_own}
+    text: wt2
+
+  - name: delete_hit
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: 刪除=hi问候
+    db: [keywords]
+
+  - name: delete_miss
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: 刪除=不存在的key
+
+  - name: list_group
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: 列表
+
+  - name: list_self
+    kind: text
+    source: {kind: group, id: C_wild, user: U_own}
+    text: 列表=我
+
+  - name: at_stripped_owner
+    kind: text
+    source: {kind: group, id: C_at, user: U_own}
+    text: 學習=at2=@hide2
+
+  - name: at_trigger_owner
+    kind: text
+    source: {kind: group, id: C_at, user: U_own}
+    text: at2
+
+  - name: image_reply_learn_jpg
+    kind: text
+    source: {kind: group, id: C_img, user: U_own}
+    text: 學習=imgjpg=https://example.com/a.jpg
+
+  - name: image_reply_jpg_head_jpeg
+    kind: text
+    source: {kind: group, id: C_img, user: U_own}
+    text: imgjpg
+    head_map:
+      https://example.com/a.jpg: image/jpeg
+
+  - name: image_reply_learn_txt
+    kind: text
+    source: {kind: group, id: C_img, user: U_own}
+    text: 學習=imgtxt=https://example.com/d.txt
+
+  - name: image_reply_txt_head_html
+    kind: text
+    source: {kind: group, id: C_img, user: U_own}
+    text: imgtxt
+    head_map:
+      https://example.com/d.txt: text/html
+
+  - name: image_reply_learn_imgur
+    kind: text
+    source: {kind: group, id: C_img, user: U_own}
+    text: 學習=imgur=https://i.imgur.com/abc.jpg
+
+  - name: image_reply_imgur_no_head
+    kind: text
+    source: {kind: group, id: C_img, user: U_own}
+    text: imgur
+
+  - name: allreply_on
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 設定=全回應=開
+    db: [settings]
+
+  - name: allreply_seed_other_group
+    kind: text
+    source: {kind: group, id: C_other, user: U_other}
+    text: 學習=sharedx=sharedV
+
+  - name: allreply_prefix_hit
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 愛醬sharedx
+
+  - name: allreply_at_excluded
+    kind: text
+    source: {kind: group, id: C_other, user: U_other}
+    text: 學習=atall=@secretall
+
+  - name: allreply_at_prefix_miss
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 愛醬atall
+
+  - name: allreply_image_on
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 設定=全圖片=開
+
+  - name: allreply_image_seed
+    kind: text
+    source: {kind: group, id: C_other, user: U_other}
+    text: 學習=pick=https://example.com/p.png
+    head_map:
+      https://example.com/p.png: image/png
+
+  - name: allreply_image_hit
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 愛醬pick
+    head_map:
+      https://example.com/p.png: image/png
+
+  - name: allreply_image_excluded
+    kind: text
+    source: {kind: group, id: C_all2, user: U_own}
+    text: 愛醬pick
+    head_map:
+      https://example.com/p.png: image/png
+
+  - name: allreply_unknown
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 愛醬從沒學過的詞xyz
+
+  - name: dm_11_unmatched
+    kind: text
+    source: {kind: user, id: U_dm, user: U_dm}
+    text: hello 1:1 unmatched
+
+  - name: dm_learn
+    kind: text
+    source: {kind: user, id: U_dm, user: U_dm}
+    text: 學習=dmk=dmv
+
+  - name: dm_trigger
+    kind: text
+    source: {kind: user, id: U_dm, user: U_dm}
+    text: dmk
+
+  - name: personal_kw_learn
+    kind: text
+    source: {kind: user, id: U_pk, user: U_pk}
+    text: 學習=pk2=pv2
+
+  - name: personal_kw_group_miss
+    kind: text
+    source: {kind: group, id: C_pk, user: U_pk}
+    text: pk2
+
+  - name: personal_kw_on
+    kind: text
+    source: {kind: group, id: C_pk, user: U_pk}
+    text: 設定=個人詞庫=開
+
+  - name: personal_kw_group_hit
+    kind: text
+    source: {kind: group, id: C_pk, user: U_pk}
+    text: pk2
+
+  - name: ignore_me_on
+    kind: text
+    source: {kind: group, id: C_ign, user: U_pk}
+    text: 設定=別理我=開
+
+  - name: ignore_me_miss
+    kind: text
+    source: {kind: group, id: C_ign, user: U_pk}
+    text: 學習=ignk=ignv
+
+  - name: ignore_me_trigger_miss
+    kind: text
+    source: {kind: group, id: C_ign, user: U_pk}
+    text: ignk
+
+  - name: ignore_me_off
+    kind: text
+    source: {kind: group, id: C_ign, user: U_pk}
+    text: 設定=別理我=關
+
+  - name: ignore_me_trigger_hit
+    kind: text
+    source: {kind: group, id: C_ign, user: U_pk}
+    text: ignk
+
+  - name: quote_lower_learn
+    kind: text
+    source: {kind: group, id: C_q, user: U_own}
+    text: 學習=QA=va"l'ue;z
+
+  - name: quote_lower_trigger
+    kind: text
+    source: {kind: group, id: C_q, user: U_own}
+    text: qa
+
+  - name: settings_show
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 設定
+
+  - name: settings_help_愛醬
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 設定=幫忙愛醬=開
+
+  - name: settings_unknown_key
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 設定=不存在的鍵=開
+
+  - name: sleep_seed_kw
+    kind: text
+    source: {kind: group, id: C_sleep, user: U_own}
+    text: 學習=sleepk=sleepv
+
+  - name: sleep_on
+    kind: text
+    source: {kind: group, id: C_sleep, user: U_own}
+    text: 愛醬安靜
+
+  - name: sleep_blocks_keyword
+    kind: text
+    source: {kind: group, id: C_sleep, user: U_own}
+    text: sleepk
+
+  - name: wake_up
+    kind: text
+    source: {kind: group, id: C_sleep, user: U_own}
+    text: 愛醬講話
+
+  - name: sleep_trigger_after_wake
+    kind: text
+    source: {kind: group, id: C_sleep, user: U_own}
+    text: sleepk
+
+  - name: wake_up_again
+    kind: text
+    source: {kind: group, id: C_sleep, user: U_own}
+    text: 愛醬講話
+
+  - name: stats_self
+    kind: text
+    source: {kind: group, id: C_stats, user: U_stat}
+    text: 回憶=我
+    db: [counts]
+
+  - name: stats_all
+    kind: text
+    source: {kind: group, id: C_stats, user: U_stat}
+    text: 回憶=全部
+
+  - name: stats_config
+    kind: text
+    source: {kind: group, id: C_stats, user: U_stat}
+    text: 回憶=設定
+
+  - name: stats_set_score
+    kind: text
+    source: {kind: group, id: C_stats, user: U_stat}
+    text: 回憶=對話=5
+
+  - name: stats_ranking_short
+    kind: text
+    source: {kind: group, id: C_stats, user: U_stat}
+    text: 回憶=排名
+
+  - name: stats_help
+    kind: text
+    source: {kind: group, id: C_stats, user: U_stat}
+    text: 回憶
+
+  - name: stats_clear_all
+    kind: text
+    source: {kind: group, id: C_stats, user: U_stat}
+    text: 回憶=清除=全部
+    db: [counts]
+
+  - name: stats_all_after_clear
+    kind: text
+    source: {kind: group, id: C_stats, user: U_stat}
+    text: 回憶=全部
+
+  - name: sticker_group
+    kind: sticker
+    source: {kind: group, id: C_stats, user: U_stat}
+    db: [counts]
+
+  - name: image_11_imgur
+    kind: image
+    source: {kind: user, id: U_dm, user: U_dm}
+    message_id: mid-golden-1
+
+  - name: follow_greet
+    kind: follow
+    source: {kind: user, id: U_new, user: U_new}
+
+  - name: join_greet
+    kind: join
+    source: {kind: group, id: C_new, user: U_new}
+
+  - name: unfollow_noop
+    kind: unfollow
+    source: {kind: user, id: U_new, user: U_new}
+
+  - name: leave_noop
+    kind: leave
+    source: {kind: group, id: C_new, user: U_new}
+
+  - name: postback_noop
+    kind: postback
+    source: {kind: user, id: U_new, user: U_new}
+
+  - name: safebrowsing_clean
+    kind: text
+    source: {kind: group, id: C_url, user: U_own}
+    text: look http://example.com/ here
+    safe_browsing: clean
+
+  - name: safebrowsing_threat
+    kind: text
+    source: {kind: group, id: C_url, user: U_own}
+    text: look http://evil.invalid/ here
+    safe_browsing: threat
+
+  - name: url_11_fallthrough
+    kind: text
+    source: {kind: user, id: U_dm, user: U_dm}
+    text: http://example.com/x
+
+  - name: room_learn_trigger
+    kind: text
+    source: {kind: room, id: R_1, user: U_own}
+    text: 學習=rk=rv
+
+  - name: room_trigger
+    kind: text
+    source: {kind: room, id: R_1, user: U_own}
+    text: rk
+
+  - name: banned_key
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: 學習=**=x
+
+  - name: hash_value_rejected
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: 學習=hk=##abc
+
+  - name: opinion_500
+    kind: text
+    source: {kind: group, id: C_learn, user: U_own}
+    text: 意見=hello feedback
+
+  - name: web_settings_fallthrough
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 網頁設定
+
+  - name: announce_fallthrough
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: 公告
+
+  - name: google_fallthrough
+    kind: text
+    source: {kind: group, id: C_all, user: U_own}
+    text: google=hello
+
+  - name: bad_signature
+    kind: bad_signature
+
+  - name: missing_signature
+    kind: missing_signature
+
+  - name: ping
+    kind: ping

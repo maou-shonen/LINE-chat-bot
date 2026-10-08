@@ -2,6 +2,17 @@
 只是一個LINE的聊天機器人  
 附帶一些其他功能
 
+## 執行 / 部署
+```sh
+cp .env.example .env  # 填好再跑
+uv run uvicorn main:app --host 0.0.0.0 --port 8000
+# docker: docker build -t line-chat-bot . && docker run --rm -v ./data:/data --env-file .env line-chat-bot
+# 遷移舊庫: docker run --rm --no-healthcheck -v /path/to/dump:/in:ro -v ./data:/data line-chat-bot \
+#   python -m app.migrate --from-dump /in/<dump>.sql.gz --to /data/line.db [--parity-sample 200]
+# NAS 見 deploy/nas/compose.yml（stack: /volume2/docker/stacks/line-chat-bot）
+```
+
+
 ## 2020.07.18
 ```
 舊的壞掉了  
@@ -30,7 +41,6 @@
     - [暫停聊天](#暫停聊天)
     - [聊天設定](#聊天設定)
     - [回憶](#回憶)
-- [開車功能](#開車功能)
 - [其他功能](#其他功能)
 - [問與答](#問與答)
 - [待完成](#待完成)
@@ -184,20 +194,9 @@ order=keyword=content##argv
 | 顯示完整記錄 | 命令詞=對象詞 |
 
 ---
-## 開車功能
-```
-此功能暫時關閉
-重製中
-```
-
----
 ## 其他功能
-* 上傳圖到圖床  
+* 上傳圖到圖床
 ![](images/上傳圖床.gif)
-
-#### 搜尋功能
-
-#### google短連結
 
 #### google網址安全檢查
 ![](images/網址安全檢查.JPG)
@@ -206,9 +205,6 @@ order=keyword=content##argv
 暫時沒有完整結果報告
 ```
 
-#### 天氣
-
----
 ## 問與答
 ##### Q:愛醬會不會儲存內容?
 ```
@@ -282,9 +278,6 @@ LINE官方BOT如果要主動說話 必須使用專業版 32400日元/每月
 
 ---
 ## 待完成
-* 開車功能 
-* 網頁設定
-* 訂閱pixiv
 * 基於機器學習的AI
 * [其他建議](https://goo.gl/forms/c7TPu8QLUq4mMJft2)
 

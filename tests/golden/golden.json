@@ -1,0 +1,2146 @@
+[
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-0",
+        [
+          {
+            "text": "「說明」(本說明)\n「學習=<關鍵字>=<內容>」\n「刪除=<關鍵字>」\n「列表」\n「設定=<功能>=<開關/值>」(群)\n「意見=<內容>」\n「回憶」(群)\n「愛醬睡覺」(群)\n「愛醬起床」(群)\n\n<>代表可以省略\n省略後可以查詢說明\n(群)代表群組限定\n\n※如果使用愛醬攻擊別人產生問題\n依照LINE官方紀錄為主處理\n※作者絕對不會儲存你的對話內容\n但不建議你在需要保密的地方使用\n詳細說明 goo.gl/xMtima",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "db": {
+      "keywords": []
+    },
+    "name": "help_11",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-1",
+        [
+          {
+            "text": "None 新增 <hi问候>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "db": {
+      "keywords": [
+        [
+          "C_learn",
+          "hi问候",
+          "helloReply"
+        ]
+      ]
+    },
+    "name": "learn_group",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-2",
+        [
+          {
+            "text": "helloReply",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "trigger_exact_group",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-3",
+        [
+          {
+            "text": "hi问候 = helloReply",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "learn_query_hit",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-4",
+        [
+          {
+            "text": "喵喵喵? 愛醬不記得 <沒有這個鍵>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "learn_query_miss",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-5",
+        [
+          {
+            "text": "「學習=<關鍵字>=<內容>」\n關鍵字可用雙米號<**>為萬用字元\n內容省略時可查詢內容\n內容中雙底線<__>隨機回話\n內容中雙直槓<||>分段(最多5)\n內容為圖片網址可傳圖(https)(jpg png)\n內容最尾有雙井號[##A=B]為參數A=B\n\n特別是隨機回話的子功能較多\n請查看詳細說明\n\n詳細說明 goo.gl/xMtima",
+            "type": "text"
+          },
+          {
+            "text": "隨機回話的簡短說明\n「學習=<關鍵字>=<內容A__內容B>」\n內容每段最末尾可用[%]指定比重(默認1)\n例:AAA%10__BB%2__CCC\n出現AAA的機率7/13\n出現BBB的機率2/13\n出現CCC的機率1/13\n選項可用[##種子=N] N為數字(小時)\n例:##種子=24\n同一個人在24小時內隨機的內容會一樣\n※如果要多重觸發關鍵字後面要有【**】\n觸發方法是【關鍵字*數字】\n最大可以10000連發\n另一個參數是##百分比=數量\n在「全回應」模式下可以先玩看看\n愛醬 xx的能力\n愛醬 xx的血統\n愛醬 xx的未來",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "learn_help",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-6",
+        [
+          {
+            "text": "ProbeUser 新增 <pre**>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wildcard_trailing",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-7",
+        [
+          {
+            "text": "WV",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wildcard_trailing_hit",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "wildcard_trailing_miss",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-9",
+        [
+          {
+            "text": "ProbeUser 新增 <**suf>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wildcard_leading",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-10",
+        [
+          {
+            "text": "WS",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wildcard_leading_hit",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "wildcard_leading_miss",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-12",
+        [
+          {
+            "text": "ProbeUser 新增 <**both**>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wildcard_both",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-13",
+        [
+          {
+            "text": "WB",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wildcard_both_hit",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-14",
+        [
+          {
+            "text": "ProbeUser 新增 <a**b>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wildcard_middle",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-15",
+        [
+          {
+            "text": "AB",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wildcard_middle_hit",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "wildcard_middle_miss",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-17",
+        [
+          {
+            "text": "ProbeUser 新增 <rnd>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "random_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-18",
+        [
+          {
+            "text": "ProbeUser 新增 <wtp>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "weight_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-19",
+        [
+          {
+            "text": "a",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "weight_draw",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-20",
+        [
+          {
+            "text": "ProbeUser 新增 <mdraw2**>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "multidraw_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-21",
+        [
+          {
+            "text": "v1 x 1\nv2 x 1",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "multidraw_2",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-22",
+        [
+          {
+            "text": "ProbeUser 新增 <pity1>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "pity_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-23",
+        [
+          {
+            "text": "c",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "pity_draw",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-24",
+        [
+          {
+            "text": "ProbeUser 新增 <seed1>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "seed_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-25",
+        [
+          {
+            "text": "x",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "seed_draw",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-26",
+        [
+          {
+            "text": "ProbeUser 新增 <pct>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "percent_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-27",
+        [
+          {
+            "text": "p（25.51％）\nq（74.49％）",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "percent_draw",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-28",
+        [
+          {
+            "text": "ProbeUser 新增 <md>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "split_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-29",
+        [
+          {
+            "text": "k1",
+            "type": "text"
+          },
+          {
+            "text": "k2",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "split_draw",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-30",
+        [
+          {
+            "text": "ProbeUser 新增 <pk1> \n(此為保護關鍵字 只有你可以刪除及修改 為了避免爭議 建議不要濫用)",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "protect_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-31",
+        [
+          {
+            "text": "學習失敗: 此關鍵字已被保護\n只有原設定者可以修改",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "protect_modify_denied",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-32",
+        [
+          {
+            "text": "刪除失敗: 此關鍵字已被保護\n只有原設定者可以修改",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "protect_delete_denied",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-33",
+        [
+          {
+            "text": "ProbeUser 刪除 <pk1> 成功",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "db": {
+      "keywords": [
+        [
+          "C_learn",
+          "hi问候",
+          "helloReply"
+        ],
+        [
+          "C_rand",
+          "md",
+          "k1||k2"
+        ],
+        [
+          "C_rand",
+          "mdraw2**",
+          "v1__v2__v3"
+        ],
+        [
+          "C_rand",
+          "pct",
+          "p__q##百分比=2"
+        ],
+        [
+          "C_rand",
+          "pity1",
+          "a__*b__**c##保底=1"
+        ],
+        [
+          "C_rand",
+          "rnd",
+          "aa__bb"
+        ],
+        [
+          "C_rand",
+          "seed1",
+          "x__y##種子=24"
+        ],
+        [
+          "C_rand",
+          "wtp",
+          "a%2__b%1"
+        ],
+        [
+          "C_wild",
+          "**both**",
+          "WB"
+        ],
+        [
+          "C_wild",
+          "**suf",
+          "WS"
+        ],
+        [
+          "C_wild",
+          "a**b",
+          "AB"
+        ],
+        [
+          "C_wild",
+          "pre**",
+          "WV"
+        ]
+      ]
+    },
+    "name": "protect_delete_owner",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-34",
+        [
+          {
+            "text": "ProbeUser 新增 <wt2>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "learn_plus_base",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-35",
+        [
+          {
+            "text": "ProbeUser 新增 <wt2>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "db": {
+      "keywords": [
+        [
+          "C_learn",
+          "hi问候",
+          "helloReply"
+        ],
+        [
+          "C_plus",
+          "wt2",
+          "extra__base"
+        ],
+        [
+          "C_rand",
+          "md",
+          "k1||k2"
+        ],
+        [
+          "C_rand",
+          "mdraw2**",
+          "v1__v2__v3"
+        ],
+        [
+          "C_rand",
+          "pct",
+          "p__q##百分比=2"
+        ],
+        [
+          "C_rand",
+          "pity1",
+          "a__*b__**c##保底=1"
+        ],
+        [
+          "C_rand",
+          "rnd",
+          "aa__bb"
+        ],
+        [
+          "C_rand",
+          "seed1",
+          "x__y##種子=24"
+        ],
+        [
+          "C_rand",
+          "wtp",
+          "a%2__b%1"
+        ],
+        [
+          "C_wild",
+          "**both**",
+          "WB"
+        ],
+        [
+          "C_wild",
+          "**suf",
+          "WS"
+        ],
+        [
+          "C_wild",
+          "a**b",
+          "AB"
+        ],
+        [
+          "C_wild",
+          "pre**",
+          "WV"
+        ]
+      ]
+    },
+    "name": "learn_plus_extra",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-36",
+        [
+          {
+            "text": "extra",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "learn_plus_draw",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-37",
+        [
+          {
+            "text": "ProbeUser 刪除 <hi问候> 成功",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "db": {
+      "keywords": [
+        [
+          "C_plus",
+          "wt2",
+          "extra__base"
+        ],
+        [
+          "C_rand",
+          "md",
+          "k1||k2"
+        ],
+        [
+          "C_rand",
+          "mdraw2**",
+          "v1__v2__v3"
+        ],
+        [
+          "C_rand",
+          "pct",
+          "p__q##百分比=2"
+        ],
+        [
+          "C_rand",
+          "pity1",
+          "a__*b__**c##保底=1"
+        ],
+        [
+          "C_rand",
+          "rnd",
+          "aa__bb"
+        ],
+        [
+          "C_rand",
+          "seed1",
+          "x__y##種子=24"
+        ],
+        [
+          "C_rand",
+          "wtp",
+          "a%2__b%1"
+        ],
+        [
+          "C_wild",
+          "**both**",
+          "WB"
+        ],
+        [
+          "C_wild",
+          "**suf",
+          "WS"
+        ],
+        [
+          "C_wild",
+          "a**b",
+          "AB"
+        ],
+        [
+          "C_wild",
+          "pre**",
+          "WV"
+        ]
+      ]
+    },
+    "name": "delete_hit",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-38",
+        [
+          {
+            "text": "喵喵喵? 愛醬不記得<不存在的key>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "delete_miss",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-39",
+        [
+          {
+            "text": "「列表=我」查詢自己\npre**\n**suf\n**both**\na**b",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "list_group",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-40",
+        [
+          {
+            "text": "現在群組中預設不使用個人詞庫\n有需要請用「設定」開啟",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "list_self",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-41",
+        [
+          {
+            "text": "ProbeUser 新增 <at2>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "at_stripped_owner",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-42",
+        [
+          {
+            "text": "hide2",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "at_trigger_owner",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-43",
+        [
+          {
+            "text": "ProbeUser 新增 <imgjpg>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "image_reply_learn_jpg",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-44",
+        [
+          {
+            "originalContentUrl": "https://example.com/a.jpg",
+            "previewImageUrl": "https://example.com/a.jpg",
+            "type": "image"
+          }
+        ]
+      ]
+    ],
+    "name": "image_reply_jpg_head_jpeg",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-45",
+        [
+          {
+            "text": "ProbeUser 新增 <imgtxt>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "image_reply_learn_txt",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-46",
+        [
+          {
+            "text": "https://example.com/d.txt",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "image_reply_txt_head_html",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-47",
+        [
+          {
+            "text": "ProbeUser 新增 <imgur>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "image_reply_learn_imgur",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-48",
+        [
+          {
+            "originalContentUrl": "https://i.imgur.com/abc.jpg",
+            "previewImageUrl": "https://i.imgur.com/abc.jpg",
+            "type": "image"
+          }
+        ]
+      ]
+    ],
+    "name": "image_reply_imgur_no_head",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-49",
+        [
+          {
+            "text": "設定完成",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "db": {
+      "settings": [
+        [
+          "C_all",
+          "",
+          "{\"\\u5168\\u56de\\u61c9\": true}"
+        ],
+        [
+          "C_at",
+          "U_own",
+          "{}"
+        ],
+        [
+          "C_img",
+          "U_own",
+          "{}"
+        ],
+        [
+          "C_learn",
+          "U_own",
+          "{}"
+        ],
+        [
+          "C_plus",
+          "U_own",
+          "{}"
+        ],
+        [
+          "C_rand",
+          "U_own",
+          "{}"
+        ],
+        [
+          "C_wild",
+          "U_own",
+          "{}"
+        ]
+      ]
+    },
+    "name": "allreply_on",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-50",
+        [
+          {
+            "text": "ProbeUser 新增 <sharedx> \n這種詞命中率較低喔 請善加利用萬用字元雙米號",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "allreply_seed_other_group",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-51",
+        [
+          {
+            "text": "sharedV",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "allreply_prefix_hit",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-52",
+        [
+          {
+            "text": "ProbeUser 新增 <atall>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "allreply_at_excluded",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-53",
+        [
+          {
+            "text": "愛醬不是很懂你說什麼",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "allreply_at_prefix_miss",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-54",
+        [
+          {
+            "text": "設定完成",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "allreply_image_on",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-55",
+        [
+          {
+            "text": "ProbeUser 新增 <pick>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "allreply_image_seed",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-56",
+        [
+          {
+            "originalContentUrl": "https://example.com/p.png",
+            "previewImageUrl": "https://example.com/p.png",
+            "type": "image"
+          }
+        ]
+      ]
+    ],
+    "name": "allreply_image_hit",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-57",
+        [
+          {
+            "text": "愛醬不是很懂你說什麼\n(全回應模式關閉)\n使用「設定」開啟",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "allreply_image_excluded",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-58",
+        [
+          {
+            "text": "愛醬不是很懂你說什麼",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "allreply_unknown",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-59",
+        [
+          {
+            "text": "指令說明輸入「說明」\n<個人服務>\n直接傳圖給愛醬即可上傳到圖床\n其他功能如果有建議請使用「回報」",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "dm_11_unmatched",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-60",
+        [
+          {
+            "text": "None 新增 <dmk> \n現在個人詞庫預設是不會在群組觸發的喔\n請在群組設定開啟全回應模式(預設開)或開啟個人詞庫(預設關)",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "dm_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-61",
+        [
+          {
+            "text": "dmv",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "dm_trigger",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-62",
+        [
+          {
+            "text": "None 新增 <pk2> \n現在個人詞庫預設是不會在群組觸發的喔\n請在群組設定開啟全回應模式(預設開)或開啟個人詞庫(預設關)",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "personal_kw_learn",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "personal_kw_group_miss",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-64",
+        [
+          {
+            "text": "設定完成",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "personal_kw_on",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-65",
+        [
+          {
+            "text": "pv2",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "personal_kw_group_hit",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-66",
+        [
+          {
+            "text": "設定完成",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "ignore_me_on",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-67",
+        [
+          {
+            "text": "ProbeUser 新增 <ignk>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "ignore_me_miss",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "ignore_me_trigger_miss",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-69",
+        [
+          {
+            "text": "設定完成",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "ignore_me_off",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-70",
+        [
+          {
+            "text": "ignv",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "ignore_me_trigger_hit",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-71",
+        [
+          {
+            "text": "ProbeUser 新增 <qa>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "quote_lower_learn",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-72",
+        [
+          {
+            "text": "va＂l’ue；z",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "quote_lower_trigger",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-73",
+        [
+          {
+            "text": "設定=別理我=開/關\n設定=個人詞庫=開/關\n設定=全回應=開/關\n設定=全圖片=開/關(需要全回應)\n設定=幫忙愛醬=開/關\n\n(不輸入值可查看說明)",
+            "type": "text"
+          },
+          {
+            "text": "目前的設定\n<群組>\n全回應 = 開啟\n全圖片 = 開啟\n<群組中的你>\n無 (預設)",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "settings_show",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-74",
+        [
+          {
+            "text": "設定完成",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "settings_help_愛醬",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-75",
+        [
+          {
+            "text": "沒有此設定喔",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "settings_unknown_key",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-76",
+        [
+          {
+            "text": "ProbeUser 新增 <sleepk>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "sleep_seed_kw",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-77",
+        [
+          {
+            "text": "你的好友 愛醬 下線了\n(2023-11-15 10:13)",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "sleep_on",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "sleep_blocks_keyword",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-79",
+        [
+          {
+            "text": "你的好友 愛醬 上線啦！",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wake_up",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-80",
+        [
+          {
+            "text": "sleepv",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "sleep_trigger_after_wake",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-81",
+        [
+          {
+            "text": "愛醬沒睡 ╮(╯_╰)╭",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "wake_up_again",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-82",
+        [
+          {
+            "text": "愛醬記得 你\n調教愛醬 0 次\n跟愛醬說話 0 次\n有 0 次對話\n有 0 次貼圖\n有 0 次圖片\n有 0 次傳送門\n講過 0 次「幹」\n總計 0 個字\n----------\n總分 0",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "db": {
+      "counts": {
+        "C_all\u0000U_own": {
+          "字數": 33,
+          "對話": 4,
+          "觸發": 2,
+          "髒話": 0
+        },
+        "C_all2\u0000U_own": {
+          "字數": 6,
+          "對話": 1,
+          "髒話": 0
+        },
+        "C_at\u0000U_own": {
+          "字數": 3,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_ign\u0000U_pk": {
+          "字數": 8,
+          "對話": 2,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_img\u0000U_own": {
+          "字數": 17,
+          "對話": 3,
+          "觸發": 3,
+          "調教": 3,
+          "髒話": 0
+        },
+        "C_learn\u0000U_own": {
+          "字數": 4,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 3,
+          "髒話": 0
+        },
+        "C_other\u0000U_other": {
+          "調教": 3
+        },
+        "C_pk\u0000U_pk": {
+          "字數": 6,
+          "對話": 2,
+          "觸發": 1,
+          "髒話": 0
+        },
+        "C_plus\u0000U_own": {
+          "字數": 3,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 2,
+          "髒話": 0
+        },
+        "C_prot\u0000U_other": {
+          "調教": 2
+        },
+        "C_prot\u0000U_own": {
+          "調教": 2
+        },
+        "C_q\u0000U_own": {
+          "字數": 2,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_rand\u0000U_own": {
+          "字數": 26,
+          "對話": 6,
+          "觸發": 6,
+          "調教": 7,
+          "髒話": 0
+        },
+        "C_sleep\u0000U_own": {
+          "字數": 12,
+          "對話": 2,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_stats\u0000U_stat": {},
+        "C_wild\u0000U_own": {
+          "字數": 39,
+          "對話": 7,
+          "觸發": 4,
+          "調教": 4,
+          "髒話": 0
+        }
+      }
+    },
+    "name": "stats_self",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-83",
+        [
+          {
+            "text": "愛醬記得這個群組...\n有 1 個人說過話\n愛醬被調教 0 次\n跟愛醬說話 0 次\n有 0 次對話\n有 0 次貼圖\n有 0 次圖片\n有 0 次傳送門\n講過 0 次「幹」\n總計 0 個字",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "stats_all",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-84",
+        [
+          {
+            "text": "目前分數設定為:\n調教 = 30\n觸發 = 10\n對話 = 1\n貼圖 = 1\n圖片 = 1\n網頁 = 0.5\n髒話 = -10\n字數 = 0.1\n\n調整方法為\n「回憶=類型=值」\n栗子\n回憶=對話=5",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "stats_config",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-85",
+        [
+          {
+            "text": "設定完成",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "stats_set_score",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-86",
+        [
+          {
+            "text": "群組說話的不足3人\n(沒有權限等同不存在)",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "stats_ranking_short",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-87",
+        [
+          {
+            "text": "「回憶=我」　　查詢自己\n「回憶=全部」　查詢全部\n「回憶=<名字>」查詢別人\n「回憶=設定」　查詢設定\n「回憶=清除=全部」　清除群組全對話次數紀錄 (無法復原)\n「回憶=清除=<名字>」　清除群組某人的對話次數紀錄 (無法復原)",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "stats_help",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-88",
+        [
+          {
+            "text": "好好好！愛醬就當作大家什麼都沒說過吧！",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "db": {
+      "counts": {
+        "C_all\u0000U_own": {
+          "字數": 33,
+          "對話": 4,
+          "觸發": 2,
+          "髒話": 0
+        },
+        "C_all2\u0000U_own": {
+          "字數": 6,
+          "對話": 1,
+          "髒話": 0
+        },
+        "C_at\u0000U_own": {
+          "字數": 3,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_ign\u0000U_pk": {
+          "字數": 8,
+          "對話": 2,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_img\u0000U_own": {
+          "字數": 17,
+          "對話": 3,
+          "觸發": 3,
+          "調教": 3,
+          "髒話": 0
+        },
+        "C_learn\u0000U_own": {
+          "字數": 4,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 3,
+          "髒話": 0
+        },
+        "C_other\u0000U_other": {
+          "調教": 3
+        },
+        "C_pk\u0000U_pk": {
+          "字數": 6,
+          "對話": 2,
+          "觸發": 1,
+          "髒話": 0
+        },
+        "C_plus\u0000U_own": {
+          "字數": 3,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 2,
+          "髒話": 0
+        },
+        "C_prot\u0000U_other": {
+          "調教": 2
+        },
+        "C_prot\u0000U_own": {
+          "調教": 2
+        },
+        "C_q\u0000U_own": {
+          "字數": 2,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_rand\u0000U_own": {
+          "字數": 26,
+          "對話": 6,
+          "觸發": 6,
+          "調教": 7,
+          "髒話": 0
+        },
+        "C_sleep\u0000U_own": {
+          "字數": 12,
+          "對話": 2,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_wild\u0000U_own": {
+          "字數": 39,
+          "對話": 7,
+          "觸發": 4,
+          "調教": 4,
+          "髒話": 0
+        }
+      }
+    },
+    "name": "stats_clear_all",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-89",
+        [
+          {
+            "text": "愛醬記得這個群組...\n有 1 個人說過話\n愛醬被調教 0 次\n跟愛醬說話 0 次\n有 0 次對話\n有 0 次貼圖\n有 0 次圖片\n有 0 次傳送門\n講過 0 次「幹」\n總計 0 個字",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "stats_all_after_clear",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "db": {
+      "counts": {
+        "C_all\u0000U_own": {
+          "字數": 33,
+          "對話": 4,
+          "觸發": 2,
+          "髒話": 0
+        },
+        "C_all2\u0000U_own": {
+          "字數": 6,
+          "對話": 1,
+          "髒話": 0
+        },
+        "C_at\u0000U_own": {
+          "字數": 3,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_ign\u0000U_pk": {
+          "字數": 8,
+          "對話": 2,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_img\u0000U_own": {
+          "字數": 17,
+          "對話": 3,
+          "觸發": 3,
+          "調教": 3,
+          "髒話": 0
+        },
+        "C_learn\u0000U_own": {
+          "字數": 4,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 3,
+          "髒話": 0
+        },
+        "C_other\u0000U_other": {
+          "調教": 3
+        },
+        "C_pk\u0000U_pk": {
+          "字數": 6,
+          "對話": 2,
+          "觸發": 1,
+          "髒話": 0
+        },
+        "C_plus\u0000U_own": {
+          "字數": 3,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 2,
+          "髒話": 0
+        },
+        "C_prot\u0000U_other": {
+          "調教": 2
+        },
+        "C_prot\u0000U_own": {
+          "調教": 2
+        },
+        "C_q\u0000U_own": {
+          "字數": 2,
+          "對話": 1,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_rand\u0000U_own": {
+          "字數": 26,
+          "對話": 6,
+          "觸發": 6,
+          "調教": 7,
+          "髒話": 0
+        },
+        "C_sleep\u0000U_own": {
+          "字數": 12,
+          "對話": 2,
+          "觸發": 1,
+          "調教": 1,
+          "髒話": 0
+        },
+        "C_stats\u0000U_stat": {
+          "貼圖": 1
+        },
+        "C_wild\u0000U_own": {
+          "字數": 39,
+          "對話": 7,
+          "觸發": 4,
+          "調教": 4,
+          "髒話": 0
+        }
+      }
+    },
+    "name": "sticker_group",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-91",
+        [
+          {
+            "text": "https://i.imgur.com/golden.jpg",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "image_11_imgur",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-92",
+        [
+          {
+            "text": "只是個做好玩的機器人\n用來群組打圖戰或嘴砲用\n還有一些小功能(慢慢新增)\n詳細輸入「說明」查詢\ngoo.gl/xMtima",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "follow_greet",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-93",
+        [
+          {
+            "text": "愛醬入侵此群組啦！\n愛醬是嘴砲、圖包、小工具的機器人\n不是聊天機器人喔\n(對話模組製作中)\n功能輸入「說明」查詢\n詳細說明 goo.gl/xMtima",
+            "type": "text"
+          },
+          {
+            "text": "預設是沒有詞庫的\n如需要使用共用詞庫輸入\n「設定=全回應」開啟",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "join_greet",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "unfollow_noop",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "leave_noop",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "postback_noop",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "safebrowsing_clean",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-98",
+        [
+          {
+            "text": "Google網址檢查：危險！",
+            "type": "text"
+          },
+          {
+            "text": "網址:http://evil.invalid/\n類型:惡意軟件",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "safebrowsing_threat",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-99",
+        [
+          {
+            "text": "指令說明輸入「說明」\n<個人服務>\n直接傳圖給愛醬即可上傳到圖床\n其他功能如果有建議請使用「回報」",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "url_11_fallthrough",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-100",
+        [
+          {
+            "text": "ProbeUser 新增 <rk>",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "room_learn_trigger",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-101",
+        [
+          {
+            "text": "rv",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "room_trigger",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-102",
+        [
+          {
+            "text": "請不要使用這些關鍵字喔\n**、** **、愛醬**、**愛醬**",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "banned_key",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-103",
+        [
+          {
+            "text": "由於規則問題 沒辦法使用##開頭的內容喔",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "hash_value_rejected",
+    "status": 200
+  },
+  {
+    "calls": [
+      [
+        "reply",
+        "rt-104",
+        [
+          {
+            "text": "回報功能尚未設定，著急的話請直接聯絡開發者",
+            "type": "text"
+          }
+        ]
+      ]
+    ],
+    "name": "opinion_500",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "web_settings_fallthrough",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "announce_fallthrough",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "google_fallthrough",
+    "status": 200
+  },
+  {
+    "calls": [],
+    "name": "bad_signature",
+    "status": 400
+  },
+  {
+    "calls": [],
+    "name": "missing_signature",
+    "status": 400
+  },
+  {
+    "body": "pong",
+    "calls": [],
+    "name": "ping",
+    "status": 200
+  }
+]
