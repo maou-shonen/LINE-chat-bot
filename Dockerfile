@@ -1,5 +1,5 @@
 # Builder resolves deps with a pinned uv; final stage keeps only venv + app.
-FROM python:3.13.16-slim-bookworm@sha256:f040863673aea2570c3ff6a5c3fb4c673a016cbc5375005ad145915922b6b78a AS builder
+FROM python:3.15.2-slim-bookworm@sha256:438fab931960f54d2bf2e19b4a89660a77d4e719688be1e565d75d0b43a8511f AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.23@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 /uv /uvx /bin/
 
@@ -11,7 +11,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-FROM python:3.13.16-slim-bookworm@sha256:f040863673aea2570c3ff6a5c3fb4c673a016cbc5375005ad145915922b6b78a
+FROM python:3.15.2-slim-bookworm@sha256:438fab931960f54d2bf2e19b4a89660a77d4e719688be1e565d75d0b43a8511f
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
