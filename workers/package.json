@@ -7,7 +7,7 @@
   },
   "scripts": {
     "typecheck": "wrangler types src/worker-configuration.d.ts && tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run && node --experimental-strip-types scripts/compare-golden.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.8.5",
