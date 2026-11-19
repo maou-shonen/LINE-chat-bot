@@ -16,6 +16,7 @@ export interface BotRepository {
   migrate(): Promise<void>;
   getSettings(key: SettingsKey): Promise<SettingsView>;
   upsertSettings(key: SettingsKey, patch: SettingsPatch): Promise<void>;
+  omitSettings(key: SettingsKey, names: readonly string[]): Promise<void>;
   countSettings(key: SettingsKey): Promise<number>;
   inspectSchema(): Promise<SchemaSnapshot>;
   touchAndCount(input: TouchAndCount): Promise<void>;
@@ -53,33 +54,17 @@ export class SqliteBotRepository implements BotRepository {
     this.storage.transactionSync(() => {
       const current = readOptions(this.storage.sql, key);
       const next = { ...(current?.options ?? {}), ...patch };
-      if (Object.keys(next).length === 0) {
-        if (current !== null) {
-          this.storage.sql.exec(
-            "DELETE FROM user_settings WHERE group_id = ? AND user_id = ?",
-            key.groupId,
-            key.userId,
-          );
-        }
-        return;
-      }
-      const encoded = JSON.stringify(next);
-      if (current === null) {
-        this.storage.sql.exec(
-          "INSERT INTO user_settings (group_id, user_id, options) VALUES (?, ?, ?)",
-          key.groupId,
-          key.userId,
-          encoded,
-        );
-        return;
-      }
-      if (current.raw === encoded) return;
-      this.storage.sql.exec(
-        "UPDATE user_settings SET options = ? WHERE group_id = ? AND user_id = ?",
-        encoded,
-        key.groupId,
-        key.userId,
-      );
+      writeOptions(this.storage.sql, key, current, next);
+    });
+  }
+
+  async omitSettings(key: SettingsKey, names: readonly string[]): Promise<void> {
+    this.storage.transactionSync(() => {
+      const current = readOptions(this.storage.sql, key);
+      if (current === null) return;
+      const next = { ...current.options };
+      for (const name of names) delete next[name];
+      writeOptions(this.storage.sql, key, current, next);
     });
   }
 
@@ -205,6 +190,41 @@ function readOptions(sql: SqlStorage, key: SettingsKey): StoredOptions | null {
     throw new TypeError("user_settings.options was not text");
   }
   return { raw, options: parseSettingsPatch(JSON.parse(raw)) };
+}
+
+function writeOptions(
+  sql: SqlStorage,
+  key: SettingsKey,
+  current: StoredOptions | null,
+  next: SettingsPatch,
+): void {
+  if (Object.keys(next).length === 0) {
+    if (current !== null) {
+      sql.exec(
+        "DELETE FROM user_settings WHERE group_id = ? AND user_id = ?",
+        key.groupId,
+        key.userId,
+      );
+    }
+    return;
+  }
+  const encoded = JSON.stringify(next);
+  if (current === null) {
+    sql.exec(
+      "INSERT INTO user_settings (group_id, user_id, options) VALUES (?, ?, ?)",
+      key.groupId,
+      key.userId,
+      encoded,
+    );
+    return;
+  }
+  if (current.raw === encoded) return;
+  sql.exec(
+    "UPDATE user_settings SET options = ? WHERE group_id = ? AND user_id = ?",
+    encoded,
+    key.groupId,
+    key.userId,
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

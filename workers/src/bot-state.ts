@@ -59,6 +59,13 @@ export class BotState extends DurableObject<Env> {
     await this.repo.upsertSettings(parseSettingsKey(key), parseSettingsPatch(patch));
   }
 
+  async omitSettings(key: SettingsKey, names: readonly string[]): Promise<void> {
+    if (!Array.isArray(names) || names.some((name) => typeof name !== "string")) {
+      throw new TypeError("omit names must be strings");
+    }
+    await this.repo.omitSettings(parseSettingsKey(key), names);
+  }
+
   async countSettings(key: SettingsKey): Promise<number> {
     return this.repo.countSettings(parseSettingsKey(key));
   }

@@ -37,6 +37,16 @@ describe("user settings", () => {
     expect(await state.countSettings(key)).toBe(1);
     expect((await state.getSettings({ groupId: "", userId: "" })).stored).toBe(false);
   });
+
+  it("keeps __proto__ as an own option", async () => {
+    const state = freshState();
+    const key = { groupId: "C1", userId: "U1" };
+    await state.upsertSettings(key, JSON.parse('{"__proto__":true}'));
+    const view = await state.getSettings(key);
+    expect(view.stored).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(view.options, "__proto__")).toBe(true);
+    expect(view.options["__proto__"]).toBe(true);
+  });
 });
 
 function freshState(): DurableObjectStub<BotState> {
