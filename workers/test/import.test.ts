@@ -16,6 +16,37 @@ import type { SchemaSnapshot } from "../src/schema";
 const SECRET = "test-import-secret";
 
 describe("import gate", () => {
+  it("probe matches sql before and after compaction of an imported batch", async () => {
+    env.IMPORT_SECRET = SECRET;
+    const stub = freshStub();
+    const rows = [];
+    for (let i = 0; i < 400; i += 1) {
+      rows.push(keywordRow(i + 1, "Cimp", `imp${i}anchor`, "bulk"));
+    }
+    rows.push(keywordRow(401, "Cimp", "importprobe", "imported"));
+    const response = await postStub(stub, { batchId: "kw:probe", rows });
+    expect(response.status).toBe(200);
+    const query = {
+      message: "importprobe",
+      scopeId: "Cimp",
+      allReply: false,
+      excludeUrl: false,
+      stripName: false,
+      rng: [] as const,
+    };
+    const during = await stub.auditKeywordSelect({ ...query, rng: [] });
+    expect(during.memory).toEqual(during.sql);
+    expect(during.replies).toEqual(["imported"]);
+    for (;;) {
+      const step = await stub.compactKeywordCache();
+      if (step.done) break;
+    }
+    await stub.measureColdRequest({ ...query, rng: [] }, 1);
+    const after = await stub.auditKeywordSelect({ ...query, rng: [] });
+    expect(after.memory).toEqual(after.sql);
+    expect(after.replies).toEqual(["imported"]);
+  });
+
   beforeEach(() => {
     env.IMPORT_SECRET = SECRET;
   });

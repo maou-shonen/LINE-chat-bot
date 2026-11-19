@@ -321,14 +321,15 @@ async function probe(
   rng: Rng,
   clock: { now: string; fetch: typeof fetch },
 ): Promise<string[] | null> {
+  const rows = await repo.keywordRows({
+    message,
+    scopeId,
+    allReply,
+    excludeUrl,
+    stripName: false,
+    rng: [],
+  });
   const normalized = normalizeKeywordMessage(message, false);
-  const stored = scopeId === null ? await repo.listProbeRows(normalized) : await repo.listKeywordRows(scopeId);
-  const rows = stored.map((row) => ({
-    id: row.scopeId,
-    keyword: row.keyword,
-    reply: row.reply,
-    anchor: row.anchor,
-  }));
   const winner = normalized === "" ? null : matchKeyword(normalized, rows, { allReply, excludeUrl }, rng);
   if (winner === null) return null;
   const org = randomOrgUrl(winner, normalized);

@@ -1,6 +1,6 @@
 # Fixture replay
 
-184/184。`workers/test/fixtures.test.ts` 依 `fixtures/suite.json` 順序重放簽章請求，比對 HTTP status、body、LINE reply/push、以及有列出的 keywords/settings/counts。
+184/184。`workers/test/fixtures.test.ts` 依 `fixtures/suite.json` 順序重放簽章請求，比對 HTTP status、body、LINE reply/push、以及有列出的 keywords/settings/counts。合併 #55 之後，關鍵字讀取走列快取的 `keywordRows`，寫入仍走 `upsertKeyword` 與 `deleteKeyword`。
 
 失敗分類：沒有。兩個 Python 舊行為都在通過的步驟裡，不是失敗。
 

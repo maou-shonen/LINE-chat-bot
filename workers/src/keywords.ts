@@ -1,5 +1,3 @@
-// shortcut: 字數用 JS length，非 BMP 會和 Python len 差，遇到 emoji 再改 code point。
-
 export const PROBE_MESSAGE_LIMIT = 300;
 export const NAME_PREFIX = "愛醬";
 
@@ -46,8 +44,13 @@ export interface KeywordSelectResult {
 
 export function anchorOf(keyword: string): string {
   let best = "";
+  let bestLen = 0;
   for (const piece of keyword.split("**")) {
-    if (piece.length > best.length) best = piece;
+    const len = [...piece].length;
+    if (len > bestLen) {
+      best = piece;
+      bestLen = len;
+    }
   }
   return best;
 }
@@ -72,12 +75,13 @@ export function normalizeKeywordMessage(message: string, stripName: boolean): st
 }
 
 export function probeNeedles(message: string, lengths: readonly number[]): string[] {
+  const chars = [...message];
   const subs = new Set<string>([""]);
-  const n = message.length;
+  const n = chars.length;
   for (const length of lengths) {
     if (!length || length > n) continue;
     for (let i = 0; i <= n - length; i += 1) {
-      subs.add(message.slice(i, i + length));
+      subs.add(chars.slice(i, i + length).join(""));
     }
   }
   return [...subs];
@@ -131,12 +135,28 @@ export function selectKeywordReplies(
   query: KeywordSelect,
 ): KeywordSelectResult {
   const rng = playRng(query.rng);
+  const selected = pickKeywordReplies(rows, query, rng);
+  rng.finish();
+  return selected;
+}
+
+export function selectKeywordRepliesOpen(
+  rows: readonly KeywordRow[],
+  query: KeywordSelect,
+): KeywordSelectResult {
+  return pickKeywordReplies(rows, query, playRng(query.rng));
+}
+
+function pickKeywordReplies(
+  rows: readonly KeywordRow[],
+  query: KeywordSelect,
+  rng: KeywordRng & { finish(): void },
+): KeywordSelectResult {
   const message = normalizeKeywordMessage(query.message, query.stripName);
   const winner = message === "" ? null : matchKeyword(message, rows, query, rng);
   const replies = winner === null
     ? (query.allReply && message !== "" ? [rng.choice(UNKNOWN_REPLIES)] : null)
     : shapeKeywordReply(winner, message, rng);
-  rng.finish();
   return { replies, candidates: rows.length };
 }
 
@@ -162,7 +182,7 @@ export function matchKeyword(
       else return reply;
     } else if (row.keyword.replaceAll("**", "") === message) {
       exact.push(reply);
-    } else if (!flags.allReply || reply.length > 1) {
+    } else if (!flags.allReply || [...reply].length > 1) {
       keys.push([row.keyword, reply]);
     }
   }
@@ -237,7 +257,7 @@ function drawCount(message: string): number {
 }
 
 function keywordLevel(keyword: string): number {
-  return keyword.length
+  return [...keyword].length
     - (keyword.split("**").length - 1)
     - (keyword.startsWith("**") ? 2 : 0)
     - (keyword.endsWith("**") ? 2 : 0);

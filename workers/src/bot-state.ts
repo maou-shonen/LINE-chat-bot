@@ -1,7 +1,6 @@
 import { handleCallback } from "./dispatch";
 import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
-import { applyImportBatch } from "./import-apply";
 import {
   IMPORT_SECRET_HEADER,
   ImportBatchError,
@@ -23,8 +22,18 @@ import {
   type KeywordWriteStatus,
   type FixtureSlices,
   type TouchRows,
+  type ColdKeywordMeasure,
+  type KeywordAudit,
+  type KeywordCacheStats,
+  type KeywordCompact,
+  type KeywordMeasure,
+  type KeywordProfile,
+  type KeywordSeed,
+  type KeywordWriteMeasure,
+  type KeywordWriteSample,
 } from "./repository";
 import type { SchemaSnapshot } from "./schema";
+import type { KeywordSelect, KeywordSelectResult } from "./keywords";
 import {
   parseSettingsKey,
   parseSettingsPatch,
@@ -89,9 +98,7 @@ export class BotState extends DurableObject<Env> {
     const batch = parsedBatch(payload);
     if (batch instanceof Response) return batch;
     try {
-      const result = this.ctx.storage.transactionSync(() =>
-        applyImportBatch(this.ctx.storage.sql, batch),
-      );
+      const result = await this.repo.importKeywordBatch(batch);
       return Response.json(result);
     } catch (error) {
       if (error instanceof TypeError) throw error;
@@ -130,6 +137,61 @@ export class BotState extends DurableObject<Env> {
     return this.repo.inspectSchema();
   }
 
+  async putKeywords(rows: KeywordSeed[]): Promise<void> {
+    await this.repo.putKeywords(rows);
+  }
+
+  async deleteKeyword(id: string, keyword: string): Promise<void>;
+  async deleteKeyword(input: KeywordDelete): Promise<KeywordDeleteStatus>;
+  async deleteKeyword(
+    idOrInput: string | KeywordDelete,
+    keyword?: string,
+  ): Promise<void | KeywordDeleteStatus> {
+    if (typeof idOrInput === "string") return this.repo.deleteKeyword(idOrInput, keyword ?? "");
+    return this.repo.deleteKeyword(parseKeywordDelete(idOrInput));
+  }
+
+  async anchorLengths(): Promise<number[]> {
+    return this.repo.anchorLengths();
+  }
+
+  async selectKeywordReplies(query: KeywordSelect): Promise<KeywordSelectResult> {
+    return this.repo.selectKeywordReplies(query);
+  }
+
+  async measureKeywordSelect(query: KeywordSelect, rounds: number): Promise<KeywordMeasure> {
+    return this.repo.measureKeywordSelect(query, rounds);
+  }
+
+  async profileKeywordSelect(query: KeywordSelect): Promise<KeywordProfile> {
+    return this.repo.profileKeywordSelect(query);
+  }
+
+  async measureColdRequest(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
+    return this.repo.measureColdRequest(query, rounds);
+  }
+
+  async keywordCacheStats(): Promise<KeywordCacheStats> {
+    return this.repo.keywordCacheStats();
+  }
+
+  async auditKeywordSelect(query: KeywordSelect): Promise<KeywordAudit> {
+    return this.repo.auditKeywordSelect(query);
+  }
+
+  async compactKeywordCache(): Promise<KeywordCompact> {
+    return this.repo.compactKeywordCache();
+  }
+
+  async measureKeywordWrite(sample: KeywordWriteSample): Promise<KeywordWriteMeasure> {
+    return this.repo.measureKeywordWrite(sample);
+  }
+
+  async alarm(): Promise<void> {
+    const step = await this.repo.compactKeywordCache();
+    if (!step.done) await this.ctx.storage.setAlarm(Date.now() + 10);
+  }
+
   async recordMessage(input: unknown, now: unknown): Promise<void> {
     await applyCountMessage(this.repo, input, now);
   }
@@ -140,10 +202,6 @@ export class BotState extends DurableObject<Env> {
 
   async upsertKeyword(input: KeywordWrite): Promise<KeywordWriteStatus> {
     return this.repo.upsertKeyword(parseKeywordWrite(input));
-  }
-
-  async deleteKeyword(input: KeywordDelete): Promise<KeywordDeleteStatus> {
-    return this.repo.deleteKeyword(parseKeywordDelete(input));
   }
 
   async getKeyword(input: KeywordLookup): Promise<string | null> {
