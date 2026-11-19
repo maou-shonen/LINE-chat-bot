@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { SqliteBotRepository, type BotRepository } from "./repository";
 import type { SchemaSnapshot } from "./schema";
 import type { KeywordSelect, KeywordSelectResult } from "./keywords";
-import type { ColdKeywordMeasure, KeywordCacheStats, KeywordMeasure, KeywordProfile, KeywordSeed } from "./repository";
+import type { ColdKeywordMeasure, KeywordAudit, KeywordCacheStats, KeywordMeasure, KeywordProfile, KeywordSeed } from "./repository";
 import {
   parseSettingsKey,
   parseSettingsPatch,
@@ -84,5 +84,9 @@ export class BotState extends DurableObject<Env> {
 
   async keywordCacheStats(): Promise<KeywordCacheStats> {
     return this.repo.keywordCacheStats();
+  }
+
+  async auditKeywordSelect(query: KeywordSelect): Promise<KeywordAudit> {
+    return this.repo.auditKeywordSelect(query);
   }
 }

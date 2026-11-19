@@ -114,12 +114,28 @@ export function selectKeywordReplies(
   query: KeywordSelect,
 ): KeywordSelectResult {
   const rng = playRng(query.rng);
+  const selected = pickKeywordReplies(rows, query, rng);
+  rng.finish();
+  return selected;
+}
+
+export function selectKeywordRepliesOpen(
+  rows: readonly KeywordRow[],
+  query: KeywordSelect,
+): KeywordSelectResult {
+  return pickKeywordReplies(rows, query, playRng(query.rng));
+}
+
+function pickKeywordReplies(
+  rows: readonly KeywordRow[],
+  query: KeywordSelect,
+  rng: KeywordRng & { finish(): void },
+): KeywordSelectResult {
   const message = normalizeKeywordMessage(query.message, query.stripName);
   const winner = message === "" ? null : matchKeyword(message, rows, query, rng);
   const replies = winner === null
     ? (query.allReply && message !== "" ? [rng.choice(UNKNOWN_REPLIES)] : null)
     : shapeKeywordReply(winner, message, rng);
-  rng.finish();
   return { replies, candidates: rows.length };
 }
 

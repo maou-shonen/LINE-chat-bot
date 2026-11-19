@@ -9,12 +9,25 @@ import {
   anchorOf,
   normalizeKeywordMessage,
   selectKeywordReplies as selectFromRows,
+  selectKeywordRepliesOpen,
   type KeywordRow,
   type KeywordSelect,
   type KeywordSelectResult,
 } from "./keywords";
+import {
+  decodeKeywordTable,
+  deleteKeywordRow,
+  emptyKeywordTable,
+  encodeKeywordTable,
+  materializeKeywordTable,
+  rowsForHits,
+  upsertKeywordRow,
+  type KeywordStore,
+  type KeywordTable,
+} from "./keyword-rows";
 
 const CACHE_META_KEY = "keyword-probe-cache-meta";
+const ROW_META_KEY = "keyword-row-cache-meta";
 const CHUNK_MAX_BYTES = 1_000_000;
 
 export interface BotRepository {
@@ -31,13 +44,17 @@ export interface BotRepository {
   profileKeywordSelect(query: KeywordSelect): Promise<KeywordProfile>;
   measureColdRequest(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure>;
   keywordCacheStats(): Promise<KeywordCacheStats>;
+  auditKeywordSelect(query: KeywordSelect): Promise<KeywordAudit>;
 }
 
 export class SqliteBotRepository implements BotRepository {
   constructor(private readonly storage: DurableObjectStorage) {}
 
   private probeCache: ProbeCache | null = null;
-  private cacheStats: KeywordCacheStats = { buildMs: 0, bytes: 0, chunks: 0, anchors: 0 };
+  private cacheStats: KeywordCacheStats = {
+    buildMs: 0, bytes: 0, chunks: 0, anchors: 0, rowBytes: 0, rowChunks: 0,
+  };
+  private rowsRead = 0;
 
   async migrate(): Promise<void> {
     this.storage.transactionSync(() => {
@@ -112,25 +129,30 @@ export class SqliteBotRepository implements BotRepository {
 
   async putKeywords(rows: KeywordSeed[]): Promise<void> {
     const cache = await this.readyCache(true);
+    const table = this.keepMutable(cache);
     let dirty = false;
     this.storage.transactionSync(() => {
       for (const row of rows) {
         writeKeyword(this.storage.sql, row);
+        upsertKeywordRow(table, row);
         if (addCachedAnchor(cache, anchorOf(row.keyword))) dirty = true;
       }
     });
-    if (dirty) await this.persistProbeCache();
+    if (rows.length > 0) await this.persistProbeCache(dirty);
   }
 
   async deleteKeyword(id: string, keyword: string): Promise<void> {
     const cache = await this.readyCache(true);
+    const table = this.keepMutable(cache);
     const anchor = anchorOf(keyword);
     this.storage.sql.exec(
       "DELETE FROM user_keyword WHERE id = ? AND keyword = ?",
       id,
       keyword,
     );
-    if (dropCachedAnchor(this.storage.sql, cache, anchor)) await this.persistProbeCache();
+    deleteKeywordRow(table, id, keyword);
+    const anchorsDirty = dropCachedAnchor(this.storage.sql, cache, anchor);
+    await this.persistProbeCache(anchorsDirty);
   }
 
   async anchorLengths(): Promise<number[]> {
@@ -165,7 +187,7 @@ export class SqliteBotRepository implements BotRepository {
     const hits = message === "" ? [] : ahoHits(cache.machine, message);
     const scanMs = performance.now() - scanStart;
     const fetchStart = performance.now();
-    const rows = rowsForSelect(this.storage.sql, message, query, hits);
+    const rows = this.rowsFor(message, query, hits);
     const fetchMs = performance.now() - fetchStart;
     const matchStart = performance.now();
     const selected = selectFromRows(rows, query);
@@ -176,6 +198,7 @@ export class SqliteBotRepository implements BotRepository {
       matchMs: performance.now() - matchStart,
       candidates: rows.length,
       replies: selected.replies,
+      rowsRead: this.rowsRead,
     };
   }
 
@@ -193,19 +216,21 @@ export class SqliteBotRepository implements BotRepository {
     for (let i = 0; i < rounds; i += 1) {
       this.probeCache = null;
       const raw = await this.readRawCache();
-      if (raw === null) throw new Error("probe cache blob is missing");
+      const rowRaw = await this.readRawRows();
+      if (raw === null || rowRaw === null) throw new Error("probe cache blob is missing");
       const decodeStart = performance.now();
       const machine = decodeAho(raw.bytes);
+      const table = decodeKeywordTable(rowRaw.bytes);
       const decoded = performance.now();
-      this.probeCache = { machine, anchors: null };
+      this.probeCache = { machine, anchors: null, table };
       const result = await this.runSelect(query);
       requestMs.push(performance.now() - decodeStart);
       decodeMs.push(decoded - decodeStart);
       replies = result.replies;
       candidates = result.candidates;
       anchors = raw.anchors;
-      bytes = raw.stored;
-      chunks = raw.chunks;
+      bytes = raw.stored + rowRaw.stored;
+      chunks = raw.chunks + rowRaw.chunks;
     }
     return { decodeMs, requestMs, replies, candidates, anchors, bytes, chunks };
   }
@@ -219,17 +244,43 @@ export class SqliteBotRepository implements BotRepository {
     if (message === "") return selectFromRows([], query);
     const cache = await this.readyCache(false);
     const hits = ahoHits(cache.machine, message);
-    const rows = rowsForSelect(this.storage.sql, message, query, hits);
+    const rows = this.rowsFor(message, query, hits);
     const selected = selectFromRows(rows, query);
     return { replies: selected.replies, candidates: rows.length };
+  }
+
+  async auditKeywordSelect(query: KeywordSelect): Promise<KeywordAudit> {
+    const message = normalizeKeywordMessage(query.message, query.stripName);
+    const cache = await this.readyCache(false);
+    const hits = message === "" ? [] : ahoHits(cache.machine, message);
+    const memory = message === "" ? [] : rowsForHits(cache.table, message, query, hits);
+    const sql = message === "" ? [] : rowsForSelect(this.storage.sql, message, query, hits);
+    return {
+      memory: memory.map(rowTag),
+      sql: sql.map(rowTag),
+      replies: selectKeywordRepliesOpen(memory, query).replies,
+      sqlReplies: selectKeywordRepliesOpen(sql, query).replies,
+    };
+  }
+
+  private keepMutable(cache: ProbeCache): KeywordTable {
+    if (cache.table.kind === "stored") cache.table = materializeKeywordTable(cache.table);
+    return cache.table;
+  }
+
+  private rowsFor(message: string, query: KeywordSelect, hits: readonly string[]): KeywordRow[] {
+    this.rowsRead = 0;
+    return rowsForHits(this.probeCache?.table ?? emptyKeywordTable(), message, query, hits);
   }
 
   private async readyCache(needAnchors: boolean): Promise<ProbeCache> {
     if (this.probeCache === null) {
       const raw = await this.readRawCache();
+      const rowRaw = await this.readRawRows();
+      const table = rowRaw === null ? loadKeywordTable(this.storage.sql) : decodeKeywordTable(rowRaw.bytes);
       this.probeCache = raw === null
-        ? { machine: buildAho([]), anchors: new Set() }
-        : { machine: decodeAho(raw.bytes), anchors: null };
+        ? { machine: buildAho([]), anchors: new Set(), table }
+        : { machine: decodeAho(raw.bytes), anchors: null, table };
     }
     if (needAnchors && this.probeCache.anchors === null) {
       this.probeCache.anchors = loadAnchors(this.storage.sql);
@@ -237,34 +288,60 @@ export class SqliteBotRepository implements BotRepository {
     return this.probeCache;
   }
 
-  private async persistProbeCache(): Promise<void> {
+  private async persistProbeCache(anchorsDirty: boolean): Promise<void> {
     const cache = this.probeCache;
     if (cache === null || cache.anchors === null) {
       throw new Error("probe cache anchors are missing");
     }
     const anchors = cache.anchors;
-    const started = performance.now();
-    cache.machine = buildAho(anchors);
-    const encoded = encodeAho(cache.machine);
-    const chunks = splitChunks(encoded);
-    const previous = metaChunkCount(await this.storage.get(CACHE_META_KEY));
-    await this.storage.put(CACHE_META_KEY, {
-      chunks: chunks.length,
-      anchors: anchors.size,
-      bytes: encoded.byteLength,
-    });
-    for (let i = 0; i < chunks.length; i += 1) {
-      const chunk = chunks[i] ?? new Uint8Array();
-      await this.storage.put(chunkKey(i), chunk.buffer);
+    let buildMs = this.cacheStats.buildMs;
+    let bytes = this.cacheStats.bytes;
+    let chunks = this.cacheStats.chunks;
+    if (anchorsDirty) {
+      const started = performance.now();
+      cache.machine = buildAho(anchors);
+      const encoded = encodeAho(cache.machine);
+      const parts = splitChunks(encoded);
+      const previous = metaChunkCount(await this.storage.get(CACHE_META_KEY));
+      await this.storage.put(CACHE_META_KEY, {
+        chunks: parts.length,
+        anchors: anchors.size,
+        bytes: encoded.byteLength,
+      });
+      for (let i = 0; i < parts.length; i += 1) {
+        const chunk = parts[i] ?? new Uint8Array();
+        await this.storage.put(chunkKey(i), chunk.buffer);
+      }
+      for (let i = parts.length; i < previous; i += 1) {
+        await this.storage.delete(chunkKey(i));
+      }
+      buildMs = performance.now() - started;
+      bytes = encoded.byteLength;
+      chunks = parts.length;
     }
-    for (let i = chunks.length; i < previous; i += 1) {
-      await this.storage.delete(chunkKey(i));
+    if (cache.table.kind !== "map") throw new Error("row table is still stored");
+    const encodedRows = encodeKeywordTable(cache.table);
+    const rowParts = splitChunks(encodedRows);
+    const previousRows = metaChunkCount(await this.storage.get(ROW_META_KEY));
+    await this.storage.put(ROW_META_KEY, {
+      chunks: rowParts.length,
+      anchors: 0,
+      bytes: encodedRows.byteLength,
+    });
+    for (let i = 0; i < rowParts.length; i += 1) {
+      const chunk = rowParts[i] ?? new Uint8Array();
+      await this.storage.put(rowChunkKey(i), chunk.buffer);
+    }
+    for (let i = rowParts.length; i < previousRows; i += 1) {
+      await this.storage.delete(rowChunkKey(i));
     }
     this.cacheStats = {
-      buildMs: performance.now() - started,
-      bytes: encoded.byteLength,
-      chunks: chunks.length,
+      buildMs,
+      bytes,
+      chunks,
       anchors: anchors.size,
+      rowBytes: encodedRows.byteLength,
+      rowChunks: rowParts.length,
     };
   }
 
@@ -285,6 +362,25 @@ export class SqliteBotRepository implements BotRepository {
     }
     if (at !== meta.bytes) return null;
     return { bytes, anchors: meta.anchors, stored: meta.bytes, chunks: meta.chunks };
+  }
+
+  private async readRawRows(): Promise<RawProbeCache | null> {
+    const meta = parseMeta(await this.storage.get(ROW_META_KEY));
+    if (meta === null) return null;
+    const parts: Uint8Array[] = [];
+    for (let i = 0; i < meta.chunks; i += 1) {
+      const part = asBytes(await this.storage.get(rowChunkKey(i)));
+      if (part === null) return null;
+      parts.push(part);
+    }
+    const bytes = new Uint8Array(meta.bytes);
+    let at = 0;
+    for (const part of parts) {
+      bytes.set(part, at);
+      at += part.byteLength;
+    }
+    if (at !== meta.bytes) return null;
+    return { bytes, anchors: 0, stored: meta.bytes, chunks: meta.chunks };
   }
 }
 
@@ -337,6 +433,7 @@ export interface KeywordProfile {
   matchMs: number;
   candidates: number;
   replies: string[] | null;
+  rowsRead: number;
 }
 
 export interface ColdKeywordMeasure {
@@ -354,11 +451,21 @@ export interface KeywordCacheStats {
   bytes: number;
   chunks: number;
   anchors: number;
+  rowBytes: number;
+  rowChunks: number;
+}
+
+export interface KeywordAudit {
+  memory: string[];
+  sql: string[];
+  replies: string[] | null;
+  sqlReplies: string[] | null;
 }
 
 interface ProbeCache {
   machine: AhoMachine;
   anchors: Set<string> | null;
+  table: KeywordStore;
 }
 
 interface RawProbeCache {
@@ -446,6 +553,32 @@ function metaChunkCount(value: unknown): number {
 
 function chunkKey(index: number): string {
   return `keyword-probe-cache-${index}`;
+}
+
+function rowChunkKey(index: number): string {
+  return `keyword-row-cache-${index}`;
+}
+
+function loadKeywordTable(sql: SqlStorage): KeywordTable {
+  const table = emptyKeywordTable();
+  for (const row of sqlRows(
+    sql,
+    "SELECT id, keyword, reply FROM user_keyword ORDER BY _id",
+  )) {
+    const keyword = row.keyword;
+    const reply = row.reply;
+    const id = row.id;
+    if (typeof keyword !== "string" || typeof reply !== "string") {
+      throw new TypeError("user_keyword row was not text");
+    }
+    if (id !== null && typeof id !== "string") throw new TypeError("user_keyword.id was not text");
+    upsertKeywordRow(table, { id, keyword, reply });
+  }
+  return table;
+}
+
+function rowTag(row: KeywordRow): string {
+  return `${row.id ?? ""}\t${row.keyword}\t${row.reply}`;
 }
 
 function anchorLengthList(sql: SqlStorage): number[] {
