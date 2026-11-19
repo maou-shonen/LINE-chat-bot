@@ -20,6 +20,11 @@ export interface BotRepository {
   inspectSchema(): Promise<SchemaSnapshot>;
   touchAndCount(input: TouchAndCount): Promise<void>;
   inspectTouch(): Promise<TouchRows>;
+  upsertKeyword(input: KeywordWrite): Promise<KeywordWriteStatus>;
+  deleteKeyword(input: KeywordDelete): Promise<KeywordDeleteStatus>;
+  getKeyword(input: KeywordLookup): Promise<string | null>;
+  listKeywords(scopeId: string | null): Promise<string[]>;
+  inspectKeywords(): Promise<KeywordSnapshot>;
 }
 
 export class SqliteBotRepository implements BotRepository {
@@ -104,6 +109,79 @@ export class SqliteBotRepository implements BotRepository {
 
   async inspectTouch(): Promise<TouchRows> {
     return readTouch(this.storage.sql);
+  }
+
+  async upsertKeyword(input: KeywordWrite): Promise<KeywordWriteStatus> {
+    let status: KeywordWriteStatus = "written";
+    this.storage.transactionSync(() => {
+      const existing = readKeywordRow(this.storage.sql, input.scopeId, input.keyword);
+      if (existing !== null && isProtectedReply(existing.reply) && existing.author !== input.author) {
+        status = "protected";
+        return;
+      }
+      const anchor = anchorOf(input.keyword);
+      const reply = existing !== null && input.plus ? `${input.reply}__${existing.reply}` : input.reply;
+      if (existing === null) {
+        this.storage.sql.exec(
+          "INSERT INTO user_keyword (id, author, keyword, reply, anchor) VALUES (?, ?, ?, ?, ?)",
+          input.scopeId,
+          input.author,
+          input.keyword,
+          reply,
+          anchor,
+        );
+      } else {
+        this.storage.sql.exec(
+          "UPDATE user_keyword SET author = ?, reply = ?, anchor = ? WHERE _id = ?",
+          input.author,
+          reply,
+          anchor,
+          existing.id,
+        );
+      }
+      if (input.scopeId !== null) {
+        this.storage.sql.exec(
+          "INSERT INTO keywords_logs (_id, id, keyword, reply, create_on) VALUES (?, ?, ?, ?, ?)",
+          crypto.randomUUID(),
+          input.scopeId,
+          input.keyword,
+          input.reply,
+          input.now,
+        );
+      }
+    });
+    return status;
+  }
+
+  async deleteKeyword(input: KeywordDelete): Promise<KeywordDeleteStatus> {
+    let status: KeywordDeleteStatus = "missing";
+    this.storage.transactionSync(() => {
+      const existing = readKeywordRow(this.storage.sql, input.scopeId, input.keyword);
+      if (existing === null) return;
+      if (isProtectedReply(existing.reply) && existing.author !== input.author) {
+        status = "protected";
+        return;
+      }
+      this.storage.sql.exec("DELETE FROM user_keyword WHERE _id = ?", existing.id);
+      status = "deleted";
+    });
+    return status;
+  }
+
+  async getKeyword(input: KeywordLookup): Promise<string | null> {
+    return readKeywordRow(this.storage.sql, input.scopeId, input.keyword)?.reply ?? null;
+  }
+
+  async listKeywords(scopeId: string | null): Promise<string[]> {
+    const scope = keywordScope(scopeId);
+    return this.storage.sql
+      .exec(`SELECT keyword FROM user_keyword WHERE ${scope.clause} ORDER BY _id`, ...scope.binds)
+      .toArray()
+      .map((row) => requiredText(asRecord(row), "keyword"));
+  }
+
+  async inspectKeywords(): Promise<KeywordSnapshot> {
+    return readKeywords(this.storage.sql);
   }
 }
 
@@ -243,5 +321,180 @@ function optionalText(row: Record<string, unknown>, key: string): string | null 
   const value = row[key];
   if (value === null || value === undefined) return null;
   if (typeof value !== "string") throw new TypeError(`${key} was not text`);
+  return value;
+}
+export interface KeywordWrite {
+  scopeId: string | null;
+  author: string | null;
+  keyword: string;
+  reply: string;
+  plus: boolean;
+  now: string;
+}
+
+export interface KeywordDelete {
+  scopeId: string | null;
+  author: string | null;
+  keyword: string;
+}
+
+export interface KeywordLookup {
+  scopeId: string | null;
+  keyword: string;
+}
+
+export type KeywordWriteStatus = "written" | "protected";
+export type KeywordDeleteStatus = "deleted" | "missing" | "protected";
+
+export interface StoredKeyword {
+  scopeId: string | null;
+  author: string | null;
+  keyword: string;
+  reply: string;
+  anchor: string;
+}
+
+export interface StoredKeywordLog {
+  scopeId: string | null;
+  keyword: string | null;
+  reply: string | null;
+  createOn: string | null;
+}
+
+export interface KeywordSnapshot {
+  keywords: StoredKeyword[];
+  logs: StoredKeywordLog[];
+}
+
+export function isProtectedReply(reply: string): boolean {
+  const at = reply.lastIndexOf("##");
+  return at >= 0 && reply.slice(at).includes("保護");
+}
+
+export function parseKeywordWrite(value: unknown): KeywordWrite {
+  const record = objectRecord(value, "keyword write");
+  return {
+    scopeId: optionalId(record.scopeId, "scopeId"),
+    author: optionalId(record.author, "author"),
+    keyword: requiredString(record.keyword, "keyword"),
+    reply: requiredString(record.reply, "reply"),
+    plus: requiredBoolean(record.plus),
+    now: requiredNow(record.now),
+  };
+}
+
+export function parseKeywordDelete(value: unknown): KeywordDelete {
+  const record = objectRecord(value, "keyword delete");
+  return {
+    scopeId: optionalId(record.scopeId, "scopeId"),
+    author: optionalId(record.author, "author"),
+    keyword: requiredString(record.keyword, "keyword"),
+  };
+}
+
+export function parseKeywordLookup(value: unknown): KeywordLookup {
+  const record = objectRecord(value, "keyword lookup");
+  return {
+    scopeId: optionalId(record.scopeId, "scopeId"),
+    keyword: requiredString(record.keyword, "keyword"),
+  };
+}
+
+export function parseScopeId(value: unknown): string | null {
+  return optionalId(value, "scopeId");
+}
+
+interface KeywordExisting {
+  id: number;
+  author: string | null;
+  reply: string;
+}
+
+function keywordScope(scopeId: string | null): { clause: string; binds: string[] } {
+  if (scopeId === null) return { clause: "id IS NULL", binds: [] };
+  return { clause: "id = ?", binds: [scopeId] };
+}
+
+function readKeywordRow(sql: SqlStorage, scopeId: string | null, keyword: string): KeywordExisting | null {
+  const scope = keywordScope(scopeId);
+  const row = sql
+    .exec(
+      `SELECT _id, author, reply FROM user_keyword WHERE ${scope.clause} AND keyword = ? ORDER BY _id LIMIT 1`,
+      ...scope.binds,
+      keyword,
+    )
+    .toArray()[0];
+  if (row === undefined) return null;
+  const record = asRecord(row);
+  const id = record._id;
+  if (typeof id !== "number") throw new TypeError("user_keyword._id was not a number");
+  return { id, author: optionalText(record, "author"), reply: requiredText(record, "reply") };
+}
+
+function readKeywords(sql: SqlStorage): KeywordSnapshot {
+  const keywords = sql
+    .exec("SELECT id, author, keyword, reply, anchor FROM user_keyword ORDER BY _id")
+    .toArray()
+    .map((row) => {
+      const record = asRecord(row);
+      return {
+        scopeId: optionalText(record, "id"),
+        author: optionalText(record, "author"),
+        keyword: requiredText(record, "keyword"),
+        reply: requiredText(record, "reply"),
+        anchor: requiredText(record, "anchor"),
+      };
+    });
+  const logs = sql
+    .exec("SELECT id, keyword, reply, create_on FROM keywords_logs ORDER BY rowid")
+    .toArray()
+    .map((row) => {
+      const record = asRecord(row);
+      return {
+        scopeId: optionalText(record, "id"),
+        keyword: optionalText(record, "keyword"),
+        reply: optionalText(record, "reply"),
+        createOn: optionalText(record, "create_on"),
+      };
+    });
+  return { keywords, logs };
+}
+
+// shortcut: JS length is UTF-16 units, upgrade when a keyword contains a non-BMP character
+function anchorOf(keyword: string): string {
+  let best = "";
+  for (const piece of keyword.split("**")) {
+    if (piece.length > best.length) best = piece;
+  }
+  return best;
+}
+
+function objectRecord(value: unknown, name: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${name} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function optionalId(value: unknown, name: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") throw new TypeError(`${name} must be a string or null`);
+  return value;
+}
+
+function requiredString(value: unknown, name: string): string {
+  if (typeof value !== "string") throw new TypeError(`${name} must be a string`);
+  return value;
+}
+
+function requiredBoolean(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new TypeError("plus must be a boolean");
+  return value;
+}
+
+function requiredNow(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError("now must be a non-empty string");
+  }
   return value;
 }

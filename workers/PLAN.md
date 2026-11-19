@@ -22,7 +22,7 @@
 7. fixture 對接。見下一節。`fixtures/SCHEMA.md` 不存在之前不要寫這支 PR。
 8. 分批匯入。每日寫入列扣掉日常用量後，上限抓 ADR 的 80k 列。NULL 範圍改成空字串。`user_settings` 與 `group_user` 丟掉代理鍵 `_id`。`options = '{}'` 的列不要匯。
 
-`keywords_logs` 要不要留，或加保留期限，放在第 4 支 PR 決定。理由是寫入列額度，不是這批能先猜的。
+`keywords_logs` 保留，不加保留期限。理由在 ADR-0002。
 
 ## Fixtures
 
