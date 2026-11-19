@@ -6,6 +6,10 @@
   "workers_dev": false,
   // Placeholder only. A real account id belongs in CLOUDFLARE_ACCOUNT_ID, not in git.
   "account_id": "00000000000000000000000000000000",
+  "vars": {
+    // Empty disables POST /import. Staging sets the real value with `wrangler secret put IMPORT_SECRET --env staging`.
+    "IMPORT_SECRET": ""
+  },
   "durable_objects": {
     "bindings": [
       {
