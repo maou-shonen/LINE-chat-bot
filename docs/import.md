@@ -2,7 +2,9 @@
 
 這份步驟把本機的一份 SQLite 複本轉成 Workers 的資料列，再分批 POST 到 staging。實際匯入需使用者同意，由 Cloudflare bot 執行。不要對正式帳號、正式 webhook 或 NAS 上的資料庫執行。
 
-寫入額度用的是 Durable Object SQLite，算法與 [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) 相同。每一列插入算 1，每個會被更新的索引再加 1。`user_keyword` 的 `INTEGER PRIMARY KEY` 就是那一列本身，不加。每送出一批再加 2，那是 `import_batches` 那一列和它的主鍵索引。Free 方案每天 100,000 列寫入。扣掉 ADR 裡約 7,800 列的日常用量，預設上限是 80,000。`estimated_days` 是 `ceil(total_write_units / daily_write_limit)`。這個數字依索引個數估算。測試沒有讀到 Cloudflare 的 rows_written 計數器。第一批建立 `import_batches` 的 DDL 也沒有算進去。80,000 和 100,000 之間的空隙蓋得住那幾列。
+寫入額度用的是 Durable Object SQLite，算法與 [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) 相同。索引會再算一列寫入（[Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/) 的 SQLite rows written 沿用同一套）。每一列插入算 1，每個會被更新的索引再加 1。`schema.ts` 的計數是 `user`、`group`、`group_user`、`keywords_logs`、`user_settings` 各 1（主鍵索引），`user_keyword` 3（`anchor`、`length(anchor)`、`(id, keyword)`）。`user_keyword` 的 `INTEGER PRIMARY KEY` 就是那一列本身，不加。每送出一批再加 2，那是 `import_batches` 那一列和它的主鍵索引。Free 方案每天 100,000 列寫入。扣掉 ADR 裡約 7,800 列的日常用量，預設上限是 80,000 write units。`estimated_days` 是 `ceil(total_write_units / daily_write_limit)`。
+
+以來源列全數匯入計算：user 43,848 × 2、group 4,407 × 2、group_user 57,543 × 2、keywords_logs 65,415 × 2、user_keyword 50,929 × 4、user_settings 55,486 × 2，再加每批 200 列的 1,392 批 × 2，合計 659,898 write units，9 天。`user_settings` 的空 options 不匯，實際更少。測試沒有讀到 Cloudflare 的 rows_written 計數器。第一批建立 `import_batches` 的 DDL 也沒有算進去。80,000 和 100,000 之間的空隙蓋得住那幾列。
 
 轉換規則如下。
 

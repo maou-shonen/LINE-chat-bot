@@ -229,6 +229,7 @@ export function formulaLines(): string[] {
     "each posted batch also writes 2 rows for import_batches (the row and its primary key index)",
     "estimated_days = ceil(total_write_units / daily_write_limit)",
     "daily_write_limit default 80000 is the Free plan 100000 written rows minus about 7800 daily bot writes",
+    "source rows all imported at batch 200: 659898 write units, 9 days; skipped empty user_settings make it shorter",
   ];
 }
 
