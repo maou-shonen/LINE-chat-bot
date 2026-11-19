@@ -4,7 +4,7 @@ import json
 import random
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from app.db import GroupUser, Store, UserKeyword, UserSettings
 from app.keywords import anchor_of, full_scan, probe_candidates
@@ -192,6 +192,49 @@ def test_user_settings_unique_with_nulls_and_sleep(store):
     with pytest.raises(IntegrityError):
         session.commit()
     session.rollback()
+    session.close()
+
+def _lookup_plan(session, group_id, user_id):
+    captured = []
+
+    def before(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            captured.append((statement, parameters))
+
+    event.listen(session.bind, "before_cursor_execute", before)
+    try:
+        UserSettings._lookup(session, group_id, user_id)
+    finally:
+        event.remove(session.bind, "before_cursor_execute", before)
+    statement, parameters = captured[-1]
+    return session.connection().exec_driver_sql(
+        "EXPLAIN QUERY PLAN " + statement, parameters).fetchall()
+
+
+def test_user_settings_lookup_uses_index(store):
+    session = store.session()
+    for group_id, user_id in (("G1", None), ("G1", "U1"), (None, None)):
+        plan = _lookup_plan(session, group_id, user_id)
+        text_plan = " ".join(str(r) for r in plan)
+        assert "ux_user_settings_group_user" in text_plan, text_plan
+        assert "SCAN user_settings" not in text_plan, text_plan
+    session.close()
+
+
+def test_get_and_show_do_not_insert_empty_rows(store):
+    session = store.session()
+    assert UserSettings.get(session, "G1", "U1", "別理我", False) is False
+    assert UserSettings.get(session, "G1", None, "全回應", False) is False
+    assert UserSettings.show(session, "G1", "U1") == (
+        "目前的設定\n<群組>\n無 (預設)\n<群組中的你>\n無 (預設)")
+    session.commit()
+    assert session.query(UserSettings).count() == 0
+    UserSettings.update(session, "G1", None, {"全回應": True})
+    session.commit()
+    assert session.query(UserSettings).count() == 1
+    assert UserSettings.get(session, "G1", None, "全回應") is True
+    assert UserSettings.get(session, "G1", "", "全回應") is True
+    assert session.query(UserSettings).count() == 1
     session.close()
 
 
