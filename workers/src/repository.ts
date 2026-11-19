@@ -161,14 +161,10 @@ export class SqliteBotRepository implements BotRepository {
     const message = normalizeKeywordMessage(query.message, query.stripName);
     const cache = await this.readyCache();
     const scanStart = performance.now();
-    const hits = message === ""
-      ? []
-      : message.length <= PROBE_MESSAGE_LIMIT
-        ? probeNeedles(message, cache.lengths)
-        : slideHits(cache, message);
+    const hits = message === "" ? [] : anchorHits(cache, message);
     const scanMs = performance.now() - scanStart;
     const fetchStart = performance.now();
-    const rows = message === "" ? [] : fetchByAnchors(this.storage.sql, hits, query.scopeId);
+    const rows = rowsForSelect(this.storage.sql, message, query, hits);
     const fetchMs = performance.now() - fetchStart;
     const matchStart = performance.now();
     const selected = selectFromRows(rows, query);
@@ -217,7 +213,8 @@ export class SqliteBotRepository implements BotRepository {
     const message = normalizeKeywordMessage(query.message, query.stripName);
     if (message === "") return selectFromRows([], query);
     const cache = await this.readyCache();
-    const rows = probeKeywordRows(this.storage.sql, message, query.scopeId, cache);
+    const hits = anchorHits(cache, message);
+    const rows = rowsForSelect(this.storage.sql, message, query, hits);
     const selected = selectFromRows(rows, query);
     return { replies: selected.replies, candidates: rows.length };
   }
@@ -323,6 +320,8 @@ interface ProbeCache {
   anchors: Set<string>;
   lengths: number[];
   firsts: Set<string>;
+  len1: Uint32Array;
+  len2: Map<number, Set<number>>;
 }
 
 interface RawProbeCache {
@@ -332,13 +331,20 @@ interface RawProbeCache {
 }
 
 function emptyProbeCache(): ProbeCache {
-  return { anchors: new Set(), lengths: [], firsts: new Set() };
+  return {
+    anchors: new Set(),
+    lengths: [],
+    firsts: new Set(),
+    len1: new Uint32Array(2048),
+    len2: new Map(),
+  };
 }
 
 function addCachedAnchor(cache: ProbeCache, anchor: string): void {
   if (anchor === "" || cache.anchors.has(anchor)) return;
   cache.anchors.add(anchor);
   cache.firsts.add(anchor[0] ?? "");
+  indexShort(cache, anchor);
   if (!cache.lengths.includes(anchor.length)) {
     cache.lengths.push(anchor.length);
     cache.lengths.sort((a, b) => a - b);
@@ -353,6 +359,7 @@ function dropCachedAnchor(sql: SqlStorage, cache: ProbeCache, anchor: string): v
   ).toArray()[0];
   if (left !== undefined) return;
   cache.anchors.delete(anchor);
+  unindexShort(cache, anchor);
   const length = anchor.length;
   const first = anchor[0] ?? "";
   let stillLength = false;
@@ -366,16 +373,89 @@ function dropCachedAnchor(sql: SqlStorage, cache: ProbeCache, anchor: string): v
   if (!stillFirst) cache.firsts.delete(first);
 }
 
-function probeKeywordRows(
+function anchorHits(cache: ProbeCache, message: string): string[] {
+  const hits = message.length <= PROBE_MESSAGE_LIMIT
+    ? probeNeedles(message, cache.lengths).filter((needle) => needle.length !== 1 && needle.length !== 2)
+    : slideHits(cache, message);
+  addShortHits(cache, message, hits);
+  return hits;
+}
+
+function addShortHits(cache: ProbeCache, message: string, hits: string[]): void {
+  const seen = new Set(hits);
+  const n = message.length;
+  for (let i = 0; i < n; i += 1) {
+    const code = message.charCodeAt(i);
+    if (!hasBit(cache.len1, code)) continue;
+    const text = message[i] ?? "";
+    if (seen.has(text)) continue;
+    seen.add(text);
+    hits.push(text);
+  }
+  for (let i = 0; i < n - 1; i += 1) {
+    const kids = cache.len2.get(message.charCodeAt(i));
+    if (kids === undefined || !kids.has(message.charCodeAt(i + 1))) continue;
+    const text = message.slice(i, i + 2);
+    if (seen.has(text)) continue;
+    seen.add(text);
+    hits.push(text);
+  }
+}
+
+function indexShort(cache: ProbeCache, anchor: string): void {
+  if (anchor.length === 1) {
+    setBit(cache.len1, anchor.charCodeAt(0));
+    return;
+  }
+  if (anchor.length !== 2) return;
+  const first = anchor.charCodeAt(0);
+  let kids = cache.len2.get(first);
+  if (kids === undefined) {
+    kids = new Set();
+    cache.len2.set(first, kids);
+  }
+  kids.add(anchor.charCodeAt(1));
+}
+
+function unindexShort(cache: ProbeCache, anchor: string): void {
+  if (anchor.length === 1) {
+    clearBit(cache.len1, anchor.charCodeAt(0));
+    return;
+  }
+  if (anchor.length !== 2) return;
+  cache.len2.get(anchor.charCodeAt(0))?.delete(anchor.charCodeAt(1));
+}
+
+function setBit(bits: Uint32Array, code: number): void {
+  const index = code >>> 5;
+  bits[index] = (bits[index] ?? 0) | (1 << (code & 31));
+}
+
+function clearBit(bits: Uint32Array, code: number): void {
+  const index = code >>> 5;
+  bits[index] = (bits[index] ?? 0) & ~(1 << (code & 31));
+}
+
+function hasBit(bits: Uint32Array, code: number): boolean {
+  const index = code >>> 5;
+  return ((bits[index] ?? 0) & (1 << (code & 31))) !== 0;
+}
+
+function rowsForSelect(
   sql: SqlStorage,
   message: string,
-  scopeId: string | null,
-  cache: ProbeCache,
+  query: KeywordSelect,
+  hits: readonly string[],
 ): KeywordRow[] {
-  const hits = message.length <= PROBE_MESSAGE_LIMIT
-    ? probeNeedles(message, cache.lengths)
-    : slideHits(cache, message);
-  return fetchByAnchors(sql, hits, scopeId);
+  if (message !== "" && !query.allReply) {
+    const exact = fetchByKeyword(sql, message, query.scopeId);
+    for (const row of exact) {
+      const reply = row.reply.startsWith("@") ? row.reply.slice(1) : row.reply;
+      if (query.excludeUrl && reply.includes("https:")) continue;
+      return [row];
+    }
+  }
+  return fetchByAnchors(sql, hits, query.scopeId);
 }
 
 function slideHits(cache: ProbeCache, message: string): string[] {
@@ -386,7 +466,7 @@ function slideHits(cache: ProbeCache, message: string): string[] {
     const ch = message[i] ?? "";
     if (!cache.firsts.has(ch)) continue;
     for (const length of cache.lengths) {
-      if (i + length > n) continue;
+      if (length < 3 || i + length > n) continue;
       const needle = message.slice(i, i + length);
       if (cache.anchors.has(needle) && !found.has(needle)) {
         found.add(needle);
@@ -426,6 +506,7 @@ function decodeProbeCache(raw: RawProbeCache): ProbeCache {
       if (anchor === "" || cache.anchors.has(anchor)) continue;
       cache.anchors.add(anchor);
       cache.firsts.add(anchor[0] ?? "");
+      indexShort(cache, anchor);
     }
   }
   return cache;
@@ -463,6 +544,22 @@ function anchorLengthList(sql: SqlStorage): number[] {
     if (typeof n !== "number") throw new TypeError("anchor length was not a number");
     return n;
   });
+}
+
+function fetchByKeyword(sql: SqlStorage, keyword: string, scopeId: string | null): KeywordRow[] {
+  const list = scopeId === null
+    ? sqlRows(
+      sql,
+      "SELECT id, keyword, reply, anchor FROM user_keyword WHERE keyword = ? ORDER BY _id",
+      keyword,
+    )
+    : sqlRows(
+      sql,
+      "SELECT id, keyword, reply, anchor FROM user_keyword WHERE keyword = ? AND id = ? ORDER BY _id",
+      keyword,
+      scopeId,
+    );
+  return list.map(keywordFrom);
 }
 
 function fetchByAnchors(sql: SqlStorage, hits: readonly string[], scopeId: string | null): KeywordRow[] {
