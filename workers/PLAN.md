@@ -32,6 +32,6 @@
 
 ## 部署前才處理
 
-不要跑 `wrangler deploy` 或 `wrangler login`。`wrangler.jsonc` 的 account id 是 32 個 0，不是真實帳號。
+不要跑 `wrangler deploy` 或 `wrangler login`。`wrangler.jsonc` 不放 account id。帳號由環境變數 `CLOUDFLARE_ACCOUNT_ID` 提供。設定檔裡的 account_id 會蓋過這個變數。
 不要加 `linebot.maou.app` 的 route，也不要改 webhook、DNS、tunnel 或 NAS stack。
 callback path 含 channel secret 與 access token。這批沒有開 logpush，也沒有 `console.log`。部署 PR 在把 secret 移出 URL 之前，不要開 request log。

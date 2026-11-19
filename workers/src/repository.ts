@@ -460,11 +460,15 @@ function readKeywords(sql: SqlStorage): KeywordSnapshot {
   return { keywords, logs };
 }
 
-// shortcut: JS length is UTF-16 units, upgrade when a keyword contains a non-BMP character
 function anchorOf(keyword: string): string {
   let best = "";
+  let bestLen = 0;
   for (const piece of keyword.split("**")) {
-    if (piece.length > best.length) best = piece;
+    const len = [...piece].length;
+    if (len > bestLen) {
+      best = piece;
+      bestLen = len;
+    }
   }
   return best;
 }

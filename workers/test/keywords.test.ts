@@ -65,6 +65,7 @@ describe("keyword commands", () => {
     await shown(state, "學習=ab**cd=tie");
     await shown(state, "學習=aa**b=left");
     await shown(state, "學習=a**bb=right");
+    await shown(state, "學習=ab**😀😀=emoji");
 
     expect(await shown(state, "學習=qa")).toEqual(["qa = va＂l’ue；z"]);
     expect(await shown(state, "學習=pipes")).toEqual(["pipes = a||b"]);
@@ -77,6 +78,7 @@ describe("keyword commands", () => {
     expect(rows.keywords.find((row) => row.keyword === "ab**cd")?.anchor).toBe("ab");
     expect(rows.keywords.find((row) => row.keyword === "aa**b")?.anchor).toBe("aa");
     expect(rows.keywords.find((row) => row.keyword === "a**bb")?.anchor).toBe("bb");
+    expect(rows.keywords.find((row) => row.keyword === "ab**😀😀")?.anchor).toBe("ab");
   });
 
   it("strips the name prefix on write and delete, but not on query", async () => {
@@ -114,6 +116,11 @@ describe("keyword commands", () => {
       "ProbeUser 新增 <a*b> \n愛醬發現你似乎要使用萬用字元?\n如果是的話請把 *(單米號) 換成 **(雙米號)\n愛醬發現你似乎要使用隨機模式?\n如果是的話請把 _(單底線) 換成 __(雙底線)",
     ]);
     expect(await shown(state, "學習=ok=a_b__c")).toEqual(["ProbeUser 新增 <ok>"]);
+    await shown(state, "學習=k=$&");
+    expect(await shown(state, "學習=k")).toEqual(["k = $&"]);
+    expect(await shown(state, "學習=😀**=x")).toEqual([
+      "ProbeUser 新增 <😀**> \n這種容易觸發的詞容易造成過多訊息喔\n請注意使用",
+    ]);
   });
 
   it("protects the tail after the last ##, including a substring match", async () => {

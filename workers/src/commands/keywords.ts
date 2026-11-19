@@ -242,7 +242,8 @@ function speaker(input: KeywordCommandInput): string {
 }
 
 function fill(template: string, key: string, value = ""): string {
-  return template.replace("<key>", key).replace("<value>", value);
+  // replacement callback: Python str.replace keeps $& literal
+  return template.replace("<key>", () => key).replace("<value>", () => value);
 }
 
 function collapseStars(keyword: string): string {
@@ -251,9 +252,8 @@ function collapseStars(keyword: string): string {
   return next;
 }
 
-// shortcut: JS length is UTF-16 units, upgrade when a keyword contains a non-BMP character
 function learnLevel(keyword: string): number {
-  return keyword.length - countToken(keyword, "**") * 3;
+  return [...keyword].length - countToken(keyword, "**") * 3;
 }
 
 function countToken(value: string, token: string): number {

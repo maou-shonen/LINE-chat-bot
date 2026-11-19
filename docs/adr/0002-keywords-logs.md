@@ -25,11 +25,11 @@ Python 每次成功新增或覆蓋關鍵字，會在 `keywords_logs` 多寫一�
 
 正式 SQLite 檔是 73.1MB。`keywords_logs` 有 65,415 列。資料表約 15.7MB。主鍵索引約 3.4MB。近一年只新增 191 列。近 30 天新增 7 列。
 
-先前用 LINE 單則 5,000 字、每天 1,450 則全是最長學習來估，一年約 2.6 GB。那是故意放大的上限。這次實測已取代那個估算。
+先前用 LINE 單則 5,000 字、每天 1,450 則全是最長學習來估，一年約 2.6 GB。那是一字一 byte 的放大上限，不是 UTF-8 容量。這次實測已取代那個估算。
 
 [Durable Objects limits](https://developers.cloudflare.com/durable-objects/platform/limits/) 寫明 Free 方案單一 SQLite Durable Object 上限 1GB。超過時寫入回 `SQLITE_FULL`。讀取與刪除仍可用。帳號合計 5GB。
 
-資料表加主鍵索引仍遠低於單一物件 1GB，也遠低於帳號 5GB。結論仍是保留，不設期限。若 `keywords_logs` 佔掉上限的明顯比例，再考慮保留期限。在那之前，刪舊列只是把寫入額度拿去換還用不到的空間。
+資料表加主鍵索引仍遠低於單一物件 1GB，也遠低於帳號 5GB。結論仍是保留，不設期限。若單一 Durable Object 的儲存（含 `keywords_logs` 與其他表）佔掉 1 GB 的明顯比例，再考慮保留期限。在那之前，刪舊列只是把寫入額度拿去換還用不到的空間。
 
 ## 沒有選的做法
 
