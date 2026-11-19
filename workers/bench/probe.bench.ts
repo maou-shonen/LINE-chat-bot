@@ -12,7 +12,7 @@ const ALPHABET = 8192;
 const CJK = 0x4e00;
 const SEED = 1;
 const ROUNDS = 21;
-const PADDED = [24, 300, 1000, 5000] as const;
+const PADDED = [24, 300, 1000] as const;
 const SENTINEL = "zzsentinel";
 const WORD_ALPHABET = commonChars.slice(0, 400);
 
@@ -68,11 +68,11 @@ it("measures probe plus match at production anchor shape", async () => {
     });
   }
 
-  const coldFreq = await state.measureColdRequest(queryFor("freq5000", freqMessage, uniformMessage), ROUNDS);
-  const coldUniform = await state.measureColdRequest(
-    queryFor("uniform5000", freqMessage, uniformMessage),
-    ROUNDS,
-  );
+  const cold: Record<string, ReturnType<typeof coldReport>> = {};
+  for (const label of labels()) {
+    cold[label] = coldReport(await state.measureColdRequest(queryFor(label, freqMessage, uniformMessage), ROUNDS));
+  }
+  const cache = await state.keywordCacheStats();
   const lengths = await state.anchorLengths();
   const report = {
     rows: ROW_COUNT,
@@ -82,10 +82,8 @@ it("measures probe plus match at production anchor shape", async () => {
     anchorLengths: lengths,
     hot: labels().map((label) => summarize(label, samples.get(label) ?? [], seen.get(label))),
     profile: profiles,
-    cold: {
-      freq5000: coldReport(coldFreq),
-      uniform5000: coldReport(coldUniform),
-    },
+    cold,
+    cache,
   };
   console.log(JSON.stringify(report));
 
@@ -96,12 +94,12 @@ it("measures probe plus match at production anchor shape", async () => {
   expect(shape.cjkLen1).toBe(CJK_LEN1);
   expect(lengths[0]).toBe(1);
   expect(lengths.at(-1)).toBe(128);
-  expect(coldFreq.anchors).toBe(DISTINCT);
-  expect(coldUniform.anchors).toBe(DISTINCT);
+  expect(cold.freq5000?.anchors).toBe(DISTINCT);
+  expect(cold.uniform5000?.anchors).toBe(DISTINCT);
   for (const item of report.hot) {
     if (item.label === "freq5000" || item.label === "uniform5000") {
       expect(item.replies?.length).toBeGreaterThan(0);
-    } else {
+    } else if (item.label !== "zero5000") {
       expect(item.replies).toEqual(["hit"]);
     }
     expect(item.candidates).toBeGreaterThan(0);
@@ -198,7 +196,7 @@ interface AnchorShape {
 }
 
 function labels(): string[] {
-  return [...PADDED.map((length) => String(length)), "freq5000", "uniform5000"];
+  return [...PADDED.map((length) => String(length)), "zero5000", "freq5000", "uniform5000"];
 }
 
 function queryFor(label: string, freqMessage: string, uniformMessage: string): KeywordSelect {
@@ -206,7 +204,9 @@ function queryFor(label: string, freqMessage: string, uniformMessage: string): K
     ? freqMessage
     : label === "uniform5000"
       ? uniformMessage
-      : padded(Number(label));
+      : label === "zero5000"
+        ? "0".repeat(5000)
+        : padded(Number(label));
   return {
     message,
     scopeId: null,

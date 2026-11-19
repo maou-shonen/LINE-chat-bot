@@ -4,11 +4,10 @@ import {
   type SchemaSnapshot,
 } from "./schema";
 import { parseSettingsPatch, type SettingsKey, type SettingsPatch, type SettingsView } from "./settings";
+import { ahoHits, buildAho, decodeAho, encodeAho, type AhoMachine } from "./aho";
 import {
   anchorOf,
   normalizeKeywordMessage,
-  probeNeedles,
-  PROBE_MESSAGE_LIMIT,
   selectKeywordReplies as selectFromRows,
   type KeywordRow,
   type KeywordSelect,
@@ -31,12 +30,14 @@ export interface BotRepository {
   measureKeywordSelect(query: KeywordSelect, rounds: number): Promise<KeywordMeasure>;
   profileKeywordSelect(query: KeywordSelect): Promise<KeywordProfile>;
   measureColdRequest(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure>;
+  keywordCacheStats(): Promise<KeywordCacheStats>;
 }
 
 export class SqliteBotRepository implements BotRepository {
   constructor(private readonly storage: DurableObjectStorage) {}
 
   private probeCache: ProbeCache | null = null;
+  private cacheStats: KeywordCacheStats = { buildMs: 0, bytes: 0, chunks: 0, anchors: 0 };
 
   async migrate(): Promise<void> {
     this.storage.transactionSync(() => {
@@ -110,26 +111,26 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async putKeywords(rows: KeywordSeed[]): Promise<void> {
-    const cache = await this.readyCache();
+    const cache = await this.readyCache(true);
+    let dirty = false;
     this.storage.transactionSync(() => {
       for (const row of rows) {
         writeKeyword(this.storage.sql, row);
-        addCachedAnchor(cache, anchorOf(row.keyword));
+        if (addCachedAnchor(cache, anchorOf(row.keyword))) dirty = true;
       }
     });
-    await this.persistProbeCache();
+    if (dirty) await this.persistProbeCache();
   }
 
   async deleteKeyword(id: string, keyword: string): Promise<void> {
-    const cache = await this.readyCache();
+    const cache = await this.readyCache(true);
     const anchor = anchorOf(keyword);
     this.storage.sql.exec(
       "DELETE FROM user_keyword WHERE id = ? AND keyword = ?",
       id,
       keyword,
     );
-    dropCachedAnchor(this.storage.sql, cache, anchor);
-    await this.persistProbeCache();
+    if (dropCachedAnchor(this.storage.sql, cache, anchor)) await this.persistProbeCache();
   }
 
   async anchorLengths(): Promise<number[]> {
@@ -159,9 +160,9 @@ export class SqliteBotRepository implements BotRepository {
 
   async profileKeywordSelect(query: KeywordSelect): Promise<KeywordProfile> {
     const message = normalizeKeywordMessage(query.message, query.stripName);
-    const cache = await this.readyCache();
+    const cache = await this.readyCache(false);
     const scanStart = performance.now();
-    const hits = message === "" ? [] : anchorHits(cache, message);
+    const hits = message === "" ? [] : ahoHits(cache.machine, message);
     const scanMs = performance.now() - scanStart;
     const fetchStart = performance.now();
     const rows = rowsForSelect(this.storage.sql, message, query, hits);
@@ -194,64 +195,96 @@ export class SqliteBotRepository implements BotRepository {
       const raw = await this.readRawCache();
       if (raw === null) throw new Error("probe cache blob is missing");
       const decodeStart = performance.now();
-      const cache = decodeProbeCache(raw);
+      const machine = decodeAho(raw.bytes);
       const decoded = performance.now();
-      this.probeCache = cache;
+      this.probeCache = { machine, anchors: null };
       const result = await this.runSelect(query);
       requestMs.push(performance.now() - decodeStart);
       decodeMs.push(decoded - decodeStart);
       replies = result.replies;
       candidates = result.candidates;
-      anchors = cache.anchors.size;
-      bytes = raw.bytes;
-      chunks = raw.chunks.length;
+      anchors = raw.anchors;
+      bytes = raw.stored;
+      chunks = raw.chunks;
     }
     return { decodeMs, requestMs, replies, candidates, anchors, bytes, chunks };
+  }
+
+  async keywordCacheStats(): Promise<KeywordCacheStats> {
+    return this.cacheStats;
   }
 
   private async runSelect(query: KeywordSelect): Promise<KeywordSelectResult> {
     const message = normalizeKeywordMessage(query.message, query.stripName);
     if (message === "") return selectFromRows([], query);
-    const cache = await this.readyCache();
-    const hits = anchorHits(cache, message);
+    const cache = await this.readyCache(false);
+    const hits = ahoHits(cache.machine, message);
     const rows = rowsForSelect(this.storage.sql, message, query, hits);
     const selected = selectFromRows(rows, query);
     return { replies: selected.replies, candidates: rows.length };
   }
 
-  private async readyCache(): Promise<ProbeCache> {
-    if (this.probeCache !== null) return this.probeCache;
-    const raw = await this.readRawCache();
-    const cache = raw === null ? emptyProbeCache() : decodeProbeCache(raw);
-    this.probeCache = cache;
-    return cache;
+  private async readyCache(needAnchors: boolean): Promise<ProbeCache> {
+    if (this.probeCache === null) {
+      const raw = await this.readRawCache();
+      this.probeCache = raw === null
+        ? { machine: buildAho([]), anchors: new Set() }
+        : { machine: decodeAho(raw.bytes), anchors: null };
+    }
+    if (needAnchors && this.probeCache.anchors === null) {
+      this.probeCache.anchors = loadAnchors(this.storage.sql);
+    }
+    return this.probeCache;
   }
 
   private async persistProbeCache(): Promise<void> {
-    const cache = this.probeCache ?? emptyProbeCache();
-    const chunks = encodeChunks([...cache.anchors]);
+    const cache = this.probeCache;
+    const anchors = cache?.anchors;
+    if (cache === undefined || anchors === null || anchors === undefined) {
+      throw new Error("probe cache anchors are missing");
+    }
+    const started = performance.now();
+    cache.machine = buildAho(anchors);
+    const encoded = encodeAho(cache.machine);
+    const chunks = splitChunks(encoded);
     const previous = metaChunkCount(await this.storage.get(CACHE_META_KEY));
-    await this.storage.put(CACHE_META_KEY, { chunks: chunks.length, lengths: cache.lengths });
+    await this.storage.put(CACHE_META_KEY, {
+      chunks: chunks.length,
+      anchors: anchors.size,
+      bytes: encoded.byteLength,
+    });
     for (let i = 0; i < chunks.length; i += 1) {
-      await this.storage.put(chunkKey(i), chunks[i]);
+      const chunk = chunks[i] ?? new Uint8Array();
+      await this.storage.put(chunkKey(i), chunk.buffer);
     }
     for (let i = chunks.length; i < previous; i += 1) {
       await this.storage.delete(chunkKey(i));
     }
+    this.cacheStats = {
+      buildMs: performance.now() - started,
+      bytes: encoded.byteLength,
+      chunks: chunks.length,
+      anchors: anchors.size,
+    };
   }
 
   private async readRawCache(): Promise<RawProbeCache | null> {
     const meta = parseMeta(await this.storage.get(CACHE_META_KEY));
     if (meta === null) return null;
-    const chunks: string[] = [];
-    let bytes = 0;
+    const parts: Uint8Array[] = [];
     for (let i = 0; i < meta.chunks; i += 1) {
-      const value = await this.storage.get(chunkKey(i));
-      if (typeof value !== "string") return null;
-      chunks.push(value);
-      bytes += value.length;
+      const part = asBytes(await this.storage.get(chunkKey(i)));
+      if (part === null) return null;
+      parts.push(part);
     }
-    return { chunks, lengths: meta.lengths, bytes };
+    const bytes = new Uint8Array(meta.bytes);
+    let at = 0;
+    for (const part of parts) {
+      bytes.set(part, at);
+      at += part.byteLength;
+    }
+    if (at !== meta.bytes) return null;
+    return { bytes, anchors: meta.anchors, stored: meta.bytes, chunks: meta.chunks };
   }
 }
 
@@ -316,129 +349,51 @@ export interface ColdKeywordMeasure {
   chunks: number;
 }
 
+export interface KeywordCacheStats {
+  buildMs: number;
+  bytes: number;
+  chunks: number;
+  anchors: number;
+}
+
 interface ProbeCache {
-  anchors: Set<string>;
-  lengths: number[];
-  firsts: Set<string>;
-  len1: Uint32Array;
-  len2: Map<number, Set<number>>;
+  machine: AhoMachine;
+  anchors: Set<string> | null;
 }
 
 interface RawProbeCache {
-  chunks: string[];
-  lengths: number[];
-  bytes: number;
+  bytes: Uint8Array;
+  anchors: number;
+  stored: number;
+  chunks: number;
 }
 
-function emptyProbeCache(): ProbeCache {
-  return {
-    anchors: new Set(),
-    lengths: [],
-    firsts: new Set(),
-    len1: new Uint32Array(2048),
-    len2: new Map(),
-  };
+function addCachedAnchor(cache: ProbeCache, anchor: string): boolean {
+  const anchors = cache.anchors;
+  if (anchors === null || anchor === "" || anchors.has(anchor)) return false;
+  anchors.add(anchor);
+  return true;
 }
 
-function addCachedAnchor(cache: ProbeCache, anchor: string): void {
-  if (anchor === "" || cache.anchors.has(anchor)) return;
-  cache.anchors.add(anchor);
-  cache.firsts.add(anchor[0] ?? "");
-  indexShort(cache, anchor);
-  if (!cache.lengths.includes(anchor.length)) {
-    cache.lengths.push(anchor.length);
-    cache.lengths.sort((a, b) => a - b);
-  }
-}
-
-function dropCachedAnchor(sql: SqlStorage, cache: ProbeCache, anchor: string): void {
-  if (anchor === "" || !cache.anchors.has(anchor)) return;
+function dropCachedAnchor(sql: SqlStorage, cache: ProbeCache, anchor: string): boolean {
+  const anchors = cache.anchors;
+  if (anchors === null || anchor === "" || !anchors.has(anchor)) return false;
   const left = sql.exec(
     "SELECT 1 AS n FROM user_keyword WHERE anchor = ? LIMIT 1",
     anchor,
   ).toArray()[0];
-  if (left !== undefined) return;
-  cache.anchors.delete(anchor);
-  unindexShort(cache, anchor);
-  const length = anchor.length;
-  const first = anchor[0] ?? "";
-  let stillLength = false;
-  let stillFirst = false;
-  for (const item of cache.anchors) {
-    if (item.length === length) stillLength = true;
-    if (item.startsWith(first)) stillFirst = true;
-    if (stillLength && stillFirst) break;
+  if (left !== undefined) return false;
+  anchors.delete(anchor);
+  return true;
+}
+
+function loadAnchors(sql: SqlStorage): Set<string> {
+  const anchors = new Set<string>();
+  for (const row of sqlRows(sql, "SELECT DISTINCT anchor FROM user_keyword")) {
+    const anchor = row.anchor;
+    if (typeof anchor === "string" && anchor !== "") anchors.add(anchor);
   }
-  if (!stillLength) cache.lengths = cache.lengths.filter((item) => item !== length);
-  if (!stillFirst) cache.firsts.delete(first);
-}
-
-function anchorHits(cache: ProbeCache, message: string): string[] {
-  const hits = message.length <= PROBE_MESSAGE_LIMIT
-    ? probeNeedles(message, cache.lengths).filter((needle) => needle.length !== 1 && needle.length !== 2)
-    : slideHits(cache, message);
-  addShortHits(cache, message, hits);
-  return hits;
-}
-
-function addShortHits(cache: ProbeCache, message: string, hits: string[]): void {
-  const seen = new Set(hits);
-  const n = message.length;
-  for (let i = 0; i < n; i += 1) {
-    const code = message.charCodeAt(i);
-    if (!hasBit(cache.len1, code)) continue;
-    const text = message[i] ?? "";
-    if (seen.has(text)) continue;
-    seen.add(text);
-    hits.push(text);
-  }
-  for (let i = 0; i < n - 1; i += 1) {
-    const kids = cache.len2.get(message.charCodeAt(i));
-    if (kids === undefined || !kids.has(message.charCodeAt(i + 1))) continue;
-    const text = message.slice(i, i + 2);
-    if (seen.has(text)) continue;
-    seen.add(text);
-    hits.push(text);
-  }
-}
-
-function indexShort(cache: ProbeCache, anchor: string): void {
-  if (anchor.length === 1) {
-    setBit(cache.len1, anchor.charCodeAt(0));
-    return;
-  }
-  if (anchor.length !== 2) return;
-  const first = anchor.charCodeAt(0);
-  let kids = cache.len2.get(first);
-  if (kids === undefined) {
-    kids = new Set();
-    cache.len2.set(first, kids);
-  }
-  kids.add(anchor.charCodeAt(1));
-}
-
-function unindexShort(cache: ProbeCache, anchor: string): void {
-  if (anchor.length === 1) {
-    clearBit(cache.len1, anchor.charCodeAt(0));
-    return;
-  }
-  if (anchor.length !== 2) return;
-  cache.len2.get(anchor.charCodeAt(0))?.delete(anchor.charCodeAt(1));
-}
-
-function setBit(bits: Uint32Array, code: number): void {
-  const index = code >>> 5;
-  bits[index] = (bits[index] ?? 0) | (1 << (code & 31));
-}
-
-function clearBit(bits: Uint32Array, code: number): void {
-  const index = code >>> 5;
-  bits[index] = (bits[index] ?? 0) & ~(1 << (code & 31));
-}
-
-function hasBit(bits: Uint32Array, code: number): boolean {
-  const index = code >>> 5;
-  return ((bits[index] ?? 0) & (1 << (code & 31))) !== 0;
+  return anchors;
 }
 
 function rowsForSelect(
@@ -458,73 +413,31 @@ function rowsForSelect(
   return fetchByAnchors(sql, hits, query.scopeId);
 }
 
-function slideHits(cache: ProbeCache, message: string): string[] {
-  const hits = [""];
-  const found = new Set<string>();
-  const n = message.length;
-  for (let i = 0; i < n; i += 1) {
-    const ch = message[i] ?? "";
-    if (!cache.firsts.has(ch)) continue;
-    for (const length of cache.lengths) {
-      if (length < 3 || i + length > n) continue;
-      const needle = message.slice(i, i + length);
-      if (cache.anchors.has(needle) && !found.has(needle)) {
-        found.add(needle);
-        hits.push(needle);
-      }
-    }
+function splitChunks(bytes: Uint8Array): Uint8Array[] {
+  if (bytes.byteLength === 0) return [bytes];
+  const chunks: Uint8Array[] = [];
+  for (let i = 0; i < bytes.byteLength; i += CHUNK_MAX_BYTES) {
+    chunks.push(bytes.slice(i, i + CHUNK_MAX_BYTES));
   }
-  return hits;
-}
-
-function encodeChunks(anchors: readonly string[]): string[] {
-  const chunks: string[] = [];
-  let batch: string[] = [];
-  let bytes = 2;
-  for (const anchor of anchors) {
-    const extra = JSON.stringify(anchor).length + (batch.length > 0 ? 1 : 0);
-    if (batch.length > 0 && bytes + extra > CHUNK_MAX_BYTES) {
-      chunks.push(JSON.stringify(batch));
-      batch = [];
-      bytes = 2;
-    }
-    batch.push(anchor);
-    bytes += extra;
-  }
-  chunks.push(JSON.stringify(batch));
   return chunks;
 }
 
-function decodeProbeCache(raw: RawProbeCache): ProbeCache {
-  const cache = emptyProbeCache();
-  cache.lengths = [...raw.lengths];
-  for (const chunk of raw.chunks) {
-    const parsed: unknown = JSON.parse(chunk);
-    if (!Array.isArray(parsed)) throw new TypeError("probe cache chunk was not a list");
-    for (const anchor of parsed) {
-      if (typeof anchor !== "string") throw new TypeError("probe cache anchor was not text");
-      if (anchor === "" || cache.anchors.has(anchor)) continue;
-      cache.anchors.add(anchor);
-      cache.firsts.add(anchor[0] ?? "");
-      indexShort(cache, anchor);
-    }
-  }
-  return cache;
+function asBytes(value: unknown): Uint8Array | null {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (value instanceof Uint8Array) return value;
+  return null;
 }
 
-function parseMeta(value: unknown): { chunks: number; lengths: number[] } | null {
+function parseMeta(value: unknown): { chunks: number; anchors: number; bytes: number } | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  if (!("chunks" in value) || !("lengths" in value)) return null;
+  if (!("chunks" in value) || !("anchors" in value) || !("bytes" in value)) return null;
   const chunks = value.chunks;
-  const lengths = value.lengths;
+  const anchors = value.anchors;
+  const bytes = value.bytes;
   if (typeof chunks !== "number" || !Number.isInteger(chunks) || chunks < 0) return null;
-  if (!Array.isArray(lengths)) return null;
-  const nums: number[] = [];
-  for (const length of lengths) {
-    if (typeof length !== "number") return null;
-    nums.push(length);
-  }
-  return { chunks, lengths: nums };
+  if (typeof anchors !== "number" || !Number.isInteger(anchors) || anchors < 0) return null;
+  if (typeof bytes !== "number" || !Number.isInteger(bytes) || bytes < 0) return null;
+  return { chunks, anchors, bytes };
 }
 
 function metaChunkCount(value: unknown): number {

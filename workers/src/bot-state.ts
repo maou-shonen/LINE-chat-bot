@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { SqliteBotRepository, type BotRepository } from "./repository";
 import type { SchemaSnapshot } from "./schema";
 import type { KeywordSelect, KeywordSelectResult } from "./keywords";
-import type { ColdKeywordMeasure, KeywordMeasure, KeywordProfile, KeywordSeed } from "./repository";
+import type { ColdKeywordMeasure, KeywordCacheStats, KeywordMeasure, KeywordProfile, KeywordSeed } from "./repository";
 import {
   parseSettingsKey,
   parseSettingsPatch,
@@ -80,5 +80,9 @@ export class BotState extends DurableObject<Env> {
 
   async measureColdRequest(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
     return this.repo.measureColdRequest(query, rounds);
+  }
+
+  async keywordCacheStats(): Promise<KeywordCacheStats> {
+    return this.repo.keywordCacheStats();
   }
 }
