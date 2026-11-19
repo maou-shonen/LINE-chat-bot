@@ -50,6 +50,40 @@ describe("keyword row cache", () => {
     });
     expect(utf16WouldHit.memory.join("\n")).not.toContain("ab**😀😀");
     expect(utf16WouldHit.sql).toEqual(utf16WouldHit.memory);
+    for (;;) {
+      const step = await state.compactKeywordCache();
+      if (step.done) break;
+    }
+    await state.putKeywords([{ id: "group", author: "U", keyword: "pendinganchor", reply: "pending" }]);
+    await state.deleteKeyword("group", rows[7]?.keyword ?? "x");
+    const pending = await state.auditKeywordSelect({
+      message: "zzpendinganchorzz",
+      scopeId: "group",
+      allReply: false,
+      excludeUrl: false,
+      stripName: false,
+      rng: [],
+    });
+    expect(pending.memory).toEqual(pending.sql);
+    expect(pending.replies).toEqual(pending.sqlReplies);
+    await state.measureColdRequest({
+      message: "zzpendinganchorzz",
+      scopeId: "group",
+      allReply: false,
+      excludeUrl: false,
+      stripName: false,
+      rng: [],
+    }, 1);
+    const afterCold = await state.auditKeywordSelect({
+      message: "zzpendinganchorzz",
+      scopeId: "group",
+      allReply: false,
+      excludeUrl: false,
+      stripName: false,
+      rng: [],
+    });
+    expect(afterCold.memory).toEqual(afterCold.sql);
+    expect(afterCold.replies).toEqual(afterCold.sqlReplies);
 
     await state.measureColdRequest({
       message: "x",

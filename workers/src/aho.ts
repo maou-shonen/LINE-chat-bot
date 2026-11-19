@@ -1,5 +1,3 @@
-// shortcut: 每次 anchor 集合變動都整台重建，單筆寫入要穩在 10ms 內再改增量失敗鏈。
-
 export interface AhoMachine {
   off: Uint32Array;
   chars: Uint16Array;
@@ -13,10 +11,73 @@ export interface AhoMachine {
 const KEY_STRIDE = 65536;
 
 export function buildAho(anchors: Iterable<string>): AhoMachine {
-  const kids: number[][] = [[]];
-  const own: number[] = [0];
-  const edge = new Map<number, number>();
-  for (const anchor of anchors) {
+  const build = startAhoBuild(anchors);
+  while (!stepAhoBuild(build, 1e9)) {
+    // one full build
+  }
+  const machine = build.machine;
+  if (machine === null) throw new Error("aho build did not finish");
+  return machine;
+}
+
+export interface AhoBuild {
+  anchors: string[];
+  at: number;
+  kids: number[][];
+  own: number[];
+  edge: Map<number, number>;
+  phase: "insert" | "fail" | "out" | "pack";
+  fail: Uint32Array;
+  queue: number[];
+  head: number;
+  outHead: Int32Array;
+  lens: number[];
+  outNext: number[];
+  packAt: number;
+  edgeCount: number;
+  off: Uint32Array;
+  chars: Uint16Array;
+  next: Uint32Array;
+  machine: AhoMachine | null;
+}
+
+export function startAhoBuild(anchors: Iterable<string>): AhoBuild {
+  return {
+    anchors: [...anchors],
+    at: 0,
+    kids: [[]],
+    own: [0],
+    edge: new Map(),
+    phase: "insert",
+    fail: new Uint32Array(0),
+    queue: [],
+    head: 0,
+    outHead: new Int32Array(0),
+    lens: [],
+    outNext: [],
+    packAt: 0,
+    edgeCount: 0,
+    off: new Uint32Array(0),
+    chars: new Uint16Array(0),
+    next: new Uint32Array(0),
+    machine: null,
+  };
+}
+
+export function stepAhoBuild(build: AhoBuild, budgetMs: number): boolean {
+  const start = performance.now();
+  if (build.phase === "insert") insertAnchors(build, start, budgetMs);
+  if (build.phase === "fail" && performance.now() - start < budgetMs) linkFails(build, start, budgetMs);
+  if (build.phase === "out" && performance.now() - start < budgetMs) linkOutputs(build, start, budgetMs);
+  if (build.phase === "pack" && performance.now() - start < budgetMs) packMachine(build, start, budgetMs);
+  return build.machine !== null;
+}
+
+function insertAnchors(build: AhoBuild, start: number, budgetMs: number): void {
+  const { kids, own, edge, anchors } = build;
+  while (build.at < anchors.length && performance.now() - start < budgetMs) {
+    const anchor = anchors[build.at] ?? "";
+    build.at += 1;
     if (anchor === "") continue;
     let state = 0;
     for (let i = 0; i < anchor.length; i += 1) {
@@ -34,15 +95,20 @@ export function buildAho(anchors: Iterable<string>): AhoMachine {
     }
     own[state] = anchor.length;
   }
-
+  if (build.at < anchors.length) return;
   const count = kids.length;
-  const fail = new Uint32Array(count);
-  const queue: number[] = [];
-  for (const code of kids[0] ?? []) queue.push(edge.get(code) ?? 0);
-  let head = 0;
-  while (head < queue.length) {
-    const state = queue[head] ?? 0;
-    head += 1;
+  build.fail = new Uint32Array(count);
+  build.outHead = new Int32Array(count);
+  build.outHead.fill(-1);
+  for (const code of kids[0] ?? []) build.queue.push(edge.get(code) ?? 0);
+  build.phase = "fail";
+}
+
+function linkFails(build: AhoBuild, start: number, budgetMs: number): void {
+  const { kids, edge, fail, queue } = build;
+  while (build.head < queue.length && performance.now() - start < budgetMs) {
+    const state = queue[build.head] ?? 0;
+    build.head += 1;
     for (const code of kids[state] ?? []) {
       const next = edge.get(state * KEY_STRIDE + code) ?? 0;
       queue.push(next);
@@ -52,12 +118,16 @@ export function buildAho(anchors: Iterable<string>): AhoMachine {
       fail[next] = landed === undefined ? 0 : landed;
     }
   }
+  if (build.head < queue.length) return;
+  build.head = 0;
+  build.phase = "out";
+}
 
-  const outHead = new Int32Array(count);
-  outHead.fill(-1);
-  const lens: number[] = [];
-  const outNext: number[] = [];
-  for (const state of queue) {
+function linkOutputs(build: AhoBuild, start: number, budgetMs: number): void {
+  const { own, fail, queue, outHead, lens, outNext } = build;
+  while (build.head < queue.length && performance.now() - start < budgetMs) {
+    const state = queue[build.head] ?? 0;
+    build.head += 1;
     const length = own[state] ?? 0;
     if (length > 0) {
       outHead[state] = lens.length;
@@ -67,32 +137,44 @@ export function buildAho(anchors: Iterable<string>): AhoMachine {
       outHead[state] = outHead[fail[state] ?? 0] ?? -1;
     }
   }
-
+  if (build.head < queue.length) return;
   let edges = 0;
-  for (const list of kids) edges += list.length;
-  const off = new Uint32Array(count + 1);
-  const chars = new Uint16Array(edges);
-  const next = new Uint32Array(edges);
-  let at = 0;
-  for (let state = 0; state < count; state += 1) {
+  for (const list of build.kids) edges += list.length;
+  const count = build.kids.length;
+  build.edgeCount = edges;
+  build.off = new Uint32Array(count + 1);
+  build.chars = new Uint16Array(edges);
+  build.next = new Uint32Array(edges);
+  build.packAt = 0;
+  build.head = 0;
+  build.phase = "pack";
+}
+
+function packMachine(build: AhoBuild, start: number, budgetMs: number): void {
+  const { kids, edge, off, chars, next } = build;
+  const count = kids.length;
+  while (build.head < count && performance.now() - start < budgetMs) {
+    const state = build.head;
+    build.head += 1;
     const list = kids[state] ?? [];
     list.sort((left, right) => left - right);
-    off[state] = at;
+    off[state] = build.packAt;
     for (const code of list) {
-      chars[at] = code;
-      next[at] = edge.get(state * KEY_STRIDE + code) ?? 0;
-      at += 1;
+      chars[build.packAt] = code;
+      next[build.packAt] = edge.get(state * KEY_STRIDE + code) ?? 0;
+      build.packAt += 1;
     }
   }
-  off[count] = at;
-  return {
+  if (build.head < count) return;
+  off[count] = build.packAt;
+  build.machine = {
     off,
     chars,
     next,
-    fail,
-    outHead,
-    outLens: Uint16Array.from(lens),
-    outNext: Int32Array.from(outNext),
+    fail: build.fail,
+    outHead: build.outHead,
+    outLens: Uint16Array.from(build.lens),
+    outNext: Int32Array.from(build.outNext),
   };
 }
 

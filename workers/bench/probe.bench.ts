@@ -101,6 +101,12 @@ it("measures probe plus match at production anchor shape", async () => {
   expect(shape.cjkLen1).toBe(CJK_LEN1);
   expect(lengths[0]).toBe(1);
   expect(lengths.at(-1)).toBe(128);
+  const writes = await measureWrites(state);
+  for (const item of writes) {
+    console.log(`WRITE ${item.label} p95=${item.p95.toFixed(2)} max=${item.max.toFixed(2)}`);
+    expect(item.p95).toBeLessThan(10);
+  }
+
   expect(cold.freq5000?.anchors).toBe(DISTINCT);
   expect(cold.uniform5000?.anchors).toBe(DISTINCT);
   for (const item of report.hot) {
@@ -132,6 +138,16 @@ async function loadRows(state: DurableObjectStub<BotState>): Promise<AnchorShape
     }
   }
   if (batch.length > 0) await state.putKeywords(batch);
+  const steps: number[] = [];
+  for (;;) {
+    const step = await state.compactKeywordCache();
+    steps.push(step.ms);
+    if (step.done) break;
+    if (steps.length > 5000) throw new Error("compact did not finish");
+  }
+  const maxStep = Math.max(...steps);
+  console.log(`COMPACT steps=${steps.length} max=${maxStep.toFixed(2)}`);
+  expect(maxStep).toBeLessThan(5);
   return shapeOf(anchors);
 }
 
@@ -258,6 +274,49 @@ function summarize(
     replies: outcome?.replies ?? null,
     candidates: outcome?.candidates ?? 0,
   };
+}
+
+async function measureWrites(state: DurableObjectStub<BotState>) {
+  const anchors = buildAnchors();
+  const reuse = mulberry32(SEED + 1);
+  const existing: Array<{ id: string; keyword: string }> = [];
+  for (let i = 0; i < DISTINCT + ROUNDS; i += 1) {
+    const anchor = anchors[i < DISTINCT ? i : Math.floor(reuse() * DISTINCT)] ?? SENTINEL;
+    if (i >= DISTINCT) existing.push({ id: `k${i}`, keyword: anchor });
+  }
+  const same = { id: "k0", keyword: anchors[0] ?? "的" };
+  const samples: Array<{ label: string; op: "put" | "delete"; id: string; keyword: string; reply: string; cold: boolean }> = [];
+  for (let round = 0; round < ROUNDS; round += 1) {
+    const fresh = `newanchor${round}zz`;
+    samples.push(
+      { label: "new-hot", op: "put", id: `n${round}`, keyword: fresh, reply: "n", cold: false },
+      { label: "new-cold", op: "put", id: `c${round}`, keyword: `${fresh}c`, reply: "n", cold: true },
+      { label: "same-hot", op: "put", id: same.id, keyword: same.keyword, reply: `r${round}`, cold: false },
+      { label: "same-cold", op: "put", id: same.id, keyword: same.keyword, reply: `c${round}`, cold: true },
+      { label: "del-hot", op: "delete", id: existing[round]?.id ?? "", keyword: existing[round]?.keyword ?? "", reply: "", cold: false },
+      { label: "del-cold", op: "delete", id: `c${round}`, keyword: `${fresh}c`, reply: "", cold: true },
+    );
+  }
+  const times = new Map<string, number[]>();
+  for (const sample of samples) {
+    const measured = await state.measureKeywordWrite(sample);
+    const list = times.get(sample.label) ?? [];
+    list.push(measured.cpuMs);
+    times.set(sample.label, list);
+    const load = times.get(`${sample.label}-load`) ?? [];
+    if (sample.cold) {
+      load.push(measured.loadMs);
+      times.set(`${sample.label}-load`, load);
+    }
+  }
+  for (const [label, values] of times) {
+    if (!label.endsWith("-load")) continue;
+    const item = summarize(label, values, undefined);
+    console.log(`WRITE ${label} p95=${item.p95.toFixed(2)} max=${item.max.toFixed(2)}`);
+  }
+  return [...times.entries()]
+    .filter(([label]) => !label.endsWith("-load"))
+    .map(([label, values]) => summarize(label, values, undefined));
 }
 
 function padded(length: number): string {

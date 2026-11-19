@@ -20,7 +20,23 @@ export interface StoredKeywordTable {
   units: Uint16Array;
 }
 
-export type KeywordStore = KeywordTable | StoredKeywordTable;
+export interface RowDeltaOp {
+  op: "put" | "del";
+  id: string;
+  keyword: string;
+  reply: string;
+}
+
+export interface OverlayKeywordTable {
+  kind: "overlay";
+  base: StoredKeywordTable;
+  deleted: Set<number>;
+  replaced: Map<number, KeywordRow>;
+  appended: Array<KeywordRow | null>;
+  keyIndex: Map<string, number>;
+}
+
+export type KeywordStore = KeywordTable | StoredKeywordTable | OverlayKeywordTable;
 
 export function emptyKeywordTable(): KeywordTable {
   return { kind: "map", rows: [], byAnchor: new Map(), byKeyword: new Map(), byId: new Map() };
@@ -71,6 +87,7 @@ export function rowsForHits(
   hits: readonly string[],
 ): KeywordRow[] {
   if (table.kind === "stored") return storedRows(table, message, query, hits);
+  if (table.kind === "overlay") return overlayRows(table, message, query, hits);
   if (message !== "" && !query.allReply) {
     for (const index of lists(table.byKeyword, message)) {
       const row = table.rows[index];
@@ -345,6 +362,330 @@ function removeIndex(index: Map<string, number[]>, key: string, at: number): voi
 
 function lists(index: Map<string, number[]>, key: string): readonly number[] {
   return index.get(key) ?? [];
+}
+
+export function applyRowDelta(base: StoredKeywordTable, ops: readonly RowDeltaOp[]): OverlayKeywordTable {
+  const table = emptyOverlay(base);
+  for (const op of ops) applyOverlayOp(table, op);
+  return table;
+}
+
+export function applyOverlayOp(table: OverlayKeywordTable, op: RowDeltaOp): void {
+  const key = `${op.id}\0${op.keyword}`;
+  const known = table.keyIndex.get(key);
+  const index = known ?? findBaseRow(table.base, op.id, op.keyword);
+  if (op.op === "del") {
+    if (index === null) return;
+    table.deleted.add(index);
+    table.replaced.delete(index);
+    if (index >= table.base.rowCount) table.appended[index - table.base.rowCount] = null;
+    table.keyIndex.delete(key);
+    return;
+  }
+  const row: KeywordRow = {
+    id: op.id,
+    keyword: op.keyword,
+    reply: op.reply,
+    anchor: anchorOf(op.keyword),
+  };
+  if (index === null) {
+    const at = table.base.rowCount + table.appended.length;
+    table.appended.push(row);
+    table.keyIndex.set(key, at);
+    return;
+  }
+  table.deleted.delete(index);
+  table.keyIndex.set(key, index);
+  if (index >= table.base.rowCount) table.appended[index - table.base.rowCount] = row;
+  else table.replaced.set(index, row);
+}
+
+export function snapshotRows(table: KeywordStore): KeywordRow[] {
+  if (table.kind === "map") {
+    const rows: KeywordRow[] = [];
+    for (const row of table.rows) {
+      if (row !== null) rows.push(row);
+    }
+    return rows;
+  }
+  if (table.kind === "stored") return storedSnapshot(table);
+  const rows: KeywordRow[] = [];
+  const count = table.base.rowCount + table.appended.length;
+  for (let i = 0; i < count; i += 1) {
+    const row = readOverlayRow(table, i);
+    if (row !== null) rows.push(row);
+  }
+  return rows;
+}
+
+function storedSnapshot(table: StoredKeywordTable): KeywordRow[] {
+  const rows: KeywordRow[] = [];
+  for (let i = 0; i < table.rowCount; i += 1) rows.push(readStoredRow(table, i));
+  return rows;
+}
+
+export function emptyStoredKeywordTable(): StoredKeywordTable {
+  return decodeKeywordTable(encodeKeywordTable(emptyKeywordTable()));
+}
+
+interface EncodeGroup {
+  anchor: string;
+  hash: number;
+  rows: number[];
+}
+
+export interface EncodeJob {
+  live: KeywordRow[];
+  groups: EncodeGroup[];
+  keywords: Array<{ hash: number; index: number }>;
+  groupBuckets: EncodeGroup[][];
+  keywordBuckets: Array<Array<{ hash: number; index: number }>>;
+  anchorLists: Map<string, number[]>;
+  bytes: Uint8Array | null;
+  phase: "bucket" | "flatten" | "header" | "fill" | "done";
+  cursor: number;
+  chars: number;
+  at: number;
+  poolAt: number;
+  anchorAt: Map<string, number>;
+}
+
+const BUCKETS = 256;
+
+export function startEncodeJob(rows: readonly KeywordRow[]): EncodeJob {
+  return {
+    live: rows as KeywordRow[],
+    groups: [],
+    keywords: [],
+    groupBuckets: Array.from({ length: BUCKETS }, () => []),
+    keywordBuckets: Array.from({ length: BUCKETS }, () => []),
+    anchorLists: new Map(),
+    bytes: null,
+    phase: "bucket",
+    cursor: 0,
+    chars: 0,
+    at: 0,
+    poolAt: 0,
+    anchorAt: new Map(),
+  };
+}
+
+export function stepEncodeJob(job: EncodeJob, budgetMs: number): boolean {
+  const start = performance.now();
+  if (job.phase === "bucket") bucketRows(job, start, budgetMs);
+  if (job.phase === "flatten" && performance.now() - start < budgetMs) flattenBuckets(job, start, budgetMs);
+  if (job.phase === "header" && performance.now() - start < budgetMs) writeHeader(job, start, budgetMs);
+  if (job.phase === "fill" && job.bytes !== null && performance.now() - start < budgetMs) {
+    fillEncodedRows(job, start, budgetMs);
+  }
+  return job.phase === "done";
+}
+
+function bucketRows(job: EncodeJob, start: number, budgetMs: number): void {
+  while (job.cursor < job.live.length && performance.now() - start < budgetMs) {
+    const index = job.cursor;
+    const row = job.live[index];
+    job.cursor += 1;
+    if (row === undefined) continue;
+    const anchor = row.anchor;
+    let listed = job.anchorLists.get(anchor);
+    if (listed === undefined) {
+      listed = [];
+      job.anchorLists.set(anchor, listed);
+      const hash = hashText(anchor);
+      job.groupBuckets[hash >>> 24]?.push({ anchor, hash, rows: listed });
+    }
+    listed.push(index);
+    const keywordHash = hashText(row.keyword);
+    job.keywordBuckets[keywordHash >>> 24]?.push({ hash: keywordHash, index });
+    job.chars += (row.id?.length ?? 0) + row.keyword.length + row.reply.length;
+  }
+  if (job.cursor < job.live.length) return;
+  job.cursor = 0;
+  job.phase = "flatten";
+}
+
+function flattenBuckets(job: EncodeJob, start: number, budgetMs: number): void {
+  while (job.cursor < BUCKETS && performance.now() - start < budgetMs) {
+    const groups = job.groupBuckets[job.cursor] ?? [];
+    groups.sort((left, right) => cmpHash(left.hash, right.hash) || cmpText(left.anchor, right.anchor));
+    for (const group of groups) job.groups.push(group);
+    const keywords = job.keywordBuckets[job.cursor] ?? [];
+    keywords.sort((left, right) => cmpHash(left.hash, right.hash) || left.index - right.index);
+    for (const item of keywords) job.keywords.push(item);
+    job.cursor += 1;
+  }
+  if (job.cursor < BUCKETS) return;
+  const header = 20;
+  const groupBytes = job.groups.length * GROUP_STRIDE * 4;
+  const keywordBytes = job.live.length * 8;
+  const poolBytes = job.live.length * 4;
+  const rowBytes = job.live.length * ROW_STRIDE * 4;
+  job.bytes = new Uint8Array(header + groupBytes + keywordBytes + poolBytes + rowBytes + job.chars * 2);
+  const view = new DataView(job.bytes.buffer);
+  view.setUint32(0, 2, true);
+  view.setUint32(4, job.groups.length, true);
+  view.setUint32(8, job.live.length, true);
+  view.setUint32(12, job.live.length, true);
+  view.setUint32(16, job.chars, true);
+  job.cursor = 0;
+  job.poolAt = 0;
+  job.phase = "header";
+}
+
+function writeHeader(job: EncodeJob, start: number, budgetMs: number): void {
+  const bytes = job.bytes;
+  if (bytes === null) return;
+  const view = new DataView(bytes.buffer);
+  const header = 20;
+  const groupBytes = job.groups.length * GROUP_STRIDE * 4;
+  const keywordBytes = job.live.length * 8;
+  const poolStart = header + groupBytes + keywordBytes;
+  while (job.cursor < job.groups.length && performance.now() - start < budgetMs) {
+    const group = job.groups[job.cursor];
+    job.cursor += 1;
+    if (group === undefined) continue;
+    const cursor = header + (job.cursor - 1) * GROUP_STRIDE * 4;
+    view.setUint32(cursor, group.hash, true);
+    view.setUint32(cursor + 8, group.anchor.length, true);
+    view.setUint32(cursor + 12, job.poolAt, true);
+    view.setUint32(cursor + 16, job.poolAt + group.rows.length, true);
+    for (const index of group.rows) {
+      view.setUint32(poolStart + job.poolAt * 4, index, true);
+      job.poolAt += 1;
+    }
+  }
+  if (job.cursor < job.groups.length) return;
+  let keywordCursor = job.cursor - job.groups.length;
+  while (keywordCursor < job.keywords.length && performance.now() - start < budgetMs) {
+    const item = job.keywords[keywordCursor];
+    if (item !== undefined) {
+      const cursor = header + groupBytes + keywordCursor * 8;
+      view.setUint32(cursor, item.hash, true);
+      view.setUint32(cursor + 4, item.index, true);
+    }
+    keywordCursor += 1;
+    job.cursor += 1;
+  }
+  if (keywordCursor < job.keywords.length) return;
+  job.cursor = 0;
+  job.at = 0;
+  job.phase = "fill";
+}
+
+function fillEncodedRows(job: EncodeJob, start: number, budgetMs: number): void {
+  const bytes = job.bytes;
+  if (bytes === null) return;
+  const view = new DataView(bytes.buffer);
+  const header = 20;
+  const groupBytes = job.groups.length * GROUP_STRIDE * 4;
+  const keywordBytes = job.live.length * 8;
+  const poolBytes = job.live.length * 4;
+  const rowBytes = job.live.length * ROW_STRIDE * 4;
+  const units = new Uint16Array(bytes.buffer, header + groupBytes + keywordBytes + poolBytes + rowBytes);
+  const rowStart = header + groupBytes + keywordBytes + poolBytes;
+  while (job.cursor < job.live.length && performance.now() - start < budgetMs) {
+    const row = job.live[job.cursor];
+    const index = job.cursor;
+    job.cursor += 1;
+    if (row === undefined) continue;
+    const id = row.id ?? "";
+    view.setUint32(rowStart + index * ROW_STRIDE * 4, job.at, true);
+    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 4, row.id === null ? NULL_ID : id.length, true);
+    job.at = writeUnits(units, job.at, id);
+    const keywordAt = job.at;
+    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 8, job.at, true);
+    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 12, row.keyword.length, true);
+    job.at = writeUnits(units, job.at, row.keyword);
+    if (!job.anchorAt.has(row.anchor)) {
+      job.anchorAt.set(row.anchor, keywordAt + row.keyword.indexOf(row.anchor));
+    }
+    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 16, job.at, true);
+    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 20, row.reply.length, true);
+    job.at = writeUnits(units, job.at, row.reply);
+  }
+  if (job.cursor < job.live.length) return;
+  let groupCursor = header;
+  for (const group of job.groups) {
+    view.setUint32(groupCursor + 4, job.anchorAt.get(group.anchor) ?? 0, true);
+    groupCursor += GROUP_STRIDE * 4;
+  }
+  job.phase = "done";
+}
+
+function emptyOverlay(base: StoredKeywordTable): OverlayKeywordTable {
+  return {
+    kind: "overlay",
+    base,
+    deleted: new Set(),
+    replaced: new Map(),
+    appended: [],
+    keyIndex: new Map(),
+  };
+}
+
+function findBaseRow(base: StoredKeywordTable, id: string, keyword: string): number | null {
+  for (const index of keywordIndexes(base, keyword)) {
+    const row = readStoredRow(base, index);
+    if (row.id === id) return index;
+  }
+  return null;
+}
+
+function overlayRows(
+  table: OverlayKeywordTable,
+  message: string,
+  query: KeywordSelect,
+  hits: readonly string[],
+): KeywordRow[] {
+  if (message !== "" && !query.allReply) {
+    const indexes = [
+      ...keywordIndexes(table.base, message),
+      ...appendedIndexes(table, (row) => row.keyword === message),
+    ].sort((left, right) => left - right);
+    for (const index of indexes) {
+      const row = readOverlayRow(table, index);
+      if (row === null || !rowPasses(row, query)) continue;
+      return [row];
+    }
+  }
+  if (hits.length === 0) return [];
+  const wanted = new Set(hits);
+  const found: number[] = [];
+  for (const hit of hits) {
+    const group = findGroup(table.base, hit);
+    if (group === null) continue;
+    for (let i = group.begin; i < group.end; i += 1) found.push(table.base.pool[i] ?? 0);
+  }
+  found.push(...appendedIndexes(table, (row) => wanted.has(row.anchor)));
+  found.sort((left, right) => left - right);
+  const rows: KeywordRow[] = [];
+  for (const index of found) {
+    const row = readOverlayRow(table, index);
+    if (row === null || (query.scopeId !== null && row.id !== query.scopeId)) continue;
+    rows.push(row);
+  }
+  return rows;
+}
+
+function appendedIndexes(
+  table: OverlayKeywordTable,
+  take: (row: KeywordRow) => boolean,
+): number[] {
+  const found: number[] = [];
+  for (let i = 0; i < table.appended.length; i += 1) {
+    const row = table.appended[i];
+    if (row !== null && row !== undefined && take(row)) found.push(table.base.rowCount + i);
+  }
+  return found;
+}
+
+function readOverlayRow(table: OverlayKeywordTable, index: number): KeywordRow | null {
+  if (table.deleted.has(index)) return null;
+  const replaced = table.replaced.get(index);
+  if (replaced !== undefined) return replaced;
+  if (index < table.base.rowCount) return readStoredRow(table.base, index);
+  return table.appended[index - table.base.rowCount] ?? null;
 }
 
 function writeUnits(units: Uint16Array, at: number, text: string): number {

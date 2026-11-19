@@ -122,4 +122,20 @@ blob 是 3422330 bytes、4 塊。自動機仍是 594360 bytes、1 塊。單筆�
 
 常用字拆開是掃描 1ms、取列 0ms、比對 2ms。先前同一則是取列 8ms、3452 列。現在每則訊息讀 0 列。一天 500 萬則的話，列讀取是 0，對照先前約 3452 × 5e6 = 1.726e10 列。
 
-`anchorOf` 用 code point 計長度，平手留第一個，對齊 Python `len`。讀取路徑沒有 300 字門檻，也沒有滑動視窗；Aho 對所有長度掃完整個 anchor 字串。滑動視窗只留在自動機測試的參考函式，窗口長度也是 code point。這份 bench 資料全是 BMP，數字不受影響。
+`anchorOf`、`keywordLevel`、全回應模式下 `reply` 長度都用 code point，平手的 anchor 留第一個，對齊 Python `len`。讀取路徑沒有 300 字門檻，也沒有滑動視窗。滑動視窗只留在自動機測試的參考函式，窗口長度也是 code point。這份 bench 資料全是 BMP，讀取數字不受影響。
+
+## 寫入
+
+學習和刪除只改 SQLite、記憶體裡的列，再追加一份 delta。不重寫 3.4MB 列 blob，也不重建自動機。新 anchor 放進 pending，掃描時用 `includes`，和自動機的命中併起來。既有 anchor 不進 pending。
+
+CPU 從 `storage.get` 回來才算，和讀取同一口徑。21 輪。load average 沿用這一輪機器，約 0.4。
+
+| 寫入 | 熱 p95 | 冷 CPU p95 | 冷的 storage.get p95 |
+| --- | --- | --- | --- |
+| 新 anchor | 1ms | 1ms | 10ms |
+| 既有 anchor | 1ms | 1ms | 10ms |
+| 刪除 | 1ms | 1ms | 12ms |
+
+冷的 get 是把約 3.4MB 列 blob 讀回來，不計進 CPU。CPU 都是 1ms。
+
+匯入把 `putKeywords` 每 1000 列叫一次。這次不會每批重建。全部寫完之後呼叫 `compactKeywordCache`，直到 `done`。這份 50929 列是 45 段，單段最大 4ms。每段寫下一個 generation 的列切片、或自動機的一段。完成才換 meta、清掉 delta。匯入過程中不要再寫，否則這次 compaction 會作廢重來。
