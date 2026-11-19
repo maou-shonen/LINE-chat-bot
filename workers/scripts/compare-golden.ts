@@ -3,7 +3,7 @@ import { formatMessages, type FormattedMessage } from "../src/line-client.ts";
 
 type GoldenRow = { name?: unknown; calls?: unknown };
 
-const fixturePath = process.argv[2] ?? new URL("../../tests/golden/golden.json", import.meta.url);
+const fixturePath = process.argv[2] ?? new URL("../../fixtures/suite.json", import.meta.url);
 const rows = rowsFrom(JSON.parse(readFileSync(fixturePath, "utf8")) as unknown);
 const required = [
   "image_reply_jpg_head_jpeg",
