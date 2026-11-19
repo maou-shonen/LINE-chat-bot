@@ -1,3 +1,4 @@
+import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
 import { SqliteBotRepository, type BotRepository } from "./repository";
 import type { SchemaSnapshot } from "./schema";
@@ -8,6 +9,7 @@ import {
   type SettingsPatch,
   type SettingsView,
 } from "./settings";
+import type { TouchRows } from "./repository";
 
 export const GLOBAL_BOT_STATE = "global";
 
@@ -50,5 +52,13 @@ export class BotState extends DurableObject<Env> {
 
   async inspectSchema(): Promise<SchemaSnapshot> {
     return this.repo.inspectSchema();
+  }
+
+  async recordMessage(input: unknown, now: unknown): Promise<void> {
+    await applyCountMessage(this.repo, input, now);
+  }
+
+  async inspectTouch(): Promise<TouchRows> {
+    return this.repo.inspectTouch();
   }
 }
