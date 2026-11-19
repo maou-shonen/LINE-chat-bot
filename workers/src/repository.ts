@@ -26,6 +26,15 @@ export interface BotRepository {
   getKeyword(input: KeywordLookup): Promise<string | null>;
   listKeywords(scopeId: string | null): Promise<string[]>;
   inspectKeywords(): Promise<KeywordSnapshot>;
+  listKeywordRows(scopeId: string | null): Promise<StoredKeyword[]>;
+  listProbeRows(message: string): Promise<StoredKeyword[]>;
+  touchSettings(key: SettingsKey): Promise<void>;
+  setUserName(id: string, name: string): Promise<void>;
+  readGroupWeights(groupId: string): Promise<CountMap>;
+  writeGroupWeight(groupId: string, key: string, value: number): Promise<void>;
+  listGroupUsers(groupId: string): Promise<GroupUserRow[]>;
+  deleteGroupUsers(groupId: string, userId: string | null): Promise<void>;
+  fixtureSlices(): Promise<FixtureSlices>;
 }
 
 export class SqliteBotRepository implements BotRepository {
@@ -168,6 +177,123 @@ export class SqliteBotRepository implements BotRepository {
   async inspectKeywords(): Promise<KeywordSnapshot> {
     return readKeywords(this.storage.sql);
   }
+
+  async listProbeRows(message: string): Promise<StoredKeyword[]> {
+    return this.storage.sql
+      .exec(
+        `SELECT id, author, keyword, reply, anchor FROM user_keyword
+         WHERE anchor = '' OR instr(?, anchor) > 0 ORDER BY _id`,
+        message,
+      )
+      .toArray()
+      .map((row) => storedKeyword(asRecord(row)));
+  }
+
+  async listKeywordRows(scopeId: string | null): Promise<StoredKeyword[]> {
+    const scope = keywordScope(scopeId);
+    return this.storage.sql
+      .exec(
+        `SELECT id, author, keyword, reply, anchor FROM user_keyword WHERE ${scope.clause} ORDER BY _id`,
+        ...scope.binds,
+      )
+      .toArray()
+      .map((row) => storedKeyword(asRecord(row)));
+  }
+
+  async touchSettings(key: SettingsKey): Promise<void> {
+    this.storage.transactionSync(() => {
+      if (readOptions(this.storage.sql, key) !== null) return;
+      this.storage.sql.exec(
+        "INSERT INTO user_settings (group_id, user_id, options) VALUES (?, ?, ?)",
+        key.groupId,
+        key.userId,
+        "{}",
+      );
+    });
+  }
+
+  async setUserName(id: string, name: string): Promise<void> {
+    this.storage.sql.exec("UPDATE user SET name = ? WHERE id = ?", name, id);
+  }
+
+  async readGroupWeights(groupId: string): Promise<CountMap> {
+    const row = this.storage.sql.exec(`SELECT _count FROM "group" WHERE id = ?`, groupId).toArray()[0];
+    if (row === undefined) return {};
+    const raw = asRecord(row)._count;
+    if (typeof raw !== "string") throw new TypeError("group._count was not text");
+    return parseCountMap(raw);
+  }
+
+  async writeGroupWeight(groupId: string, key: string, value: number): Promise<void> {
+    this.storage.transactionSync(() => {
+      const current = this.storage.sql.exec(`SELECT _count FROM "group" WHERE id = ?`, groupId).toArray()[0];
+      const map = current === undefined ? {} : parseCountMap(requiredText(asRecord(current), "_count"));
+      map[key] = value;
+      const encoded = encodeCountMap(map);
+      if (current === undefined) return;
+      this.storage.sql.exec(`UPDATE "group" SET _count = ? WHERE id = ?`, encoded, groupId);
+    });
+  }
+
+  async listGroupUsers(groupId: string): Promise<GroupUserRow[]> {
+    return this.storage.sql
+      .exec(
+        `SELECT gu.uid AS uid, gu._count AS _count, u.name AS name
+         FROM group_user gu LEFT JOIN user u ON u.id = gu.uid
+         WHERE gu.gid = ? ORDER BY gu.uid`,
+        groupId,
+      )
+      .toArray()
+      .map((row) => {
+        const record = asRecord(row);
+        const raw = record._count;
+        if (typeof raw !== "string") throw new TypeError("group_user._count was not text");
+        const uid = record.uid;
+        if (typeof uid !== "string") throw new TypeError("group_user.uid was not text");
+        return { uid, name: optionalText(record, "name"), counts: parseCountMap(raw) };
+      });
+  }
+
+  async deleteGroupUsers(groupId: string, userId: string | null): Promise<void> {
+    if (userId === null) {
+      this.storage.sql.exec("DELETE FROM group_user WHERE gid = ?", groupId);
+      return;
+    }
+    this.storage.sql.exec("DELETE FROM group_user WHERE gid = ? AND uid = ?", groupId, userId);
+  }
+
+  async fixtureSlices(): Promise<FixtureSlices> {
+    const keywords = this.storage.sql
+      .exec("SELECT id, keyword, reply FROM user_keyword ORDER BY _id")
+      .toArray()
+      .map((row) => {
+        const record = asRecord(row);
+        return [
+          optionalText(record, "id"),
+          requiredText(record, "keyword"),
+          requiredText(record, "reply"),
+        ] as [string | null, string, string];
+      });
+    const settings = this.storage.sql
+      .exec("SELECT group_id, user_id, options FROM user_settings ORDER BY group_id, user_id")
+      .toArray()
+      .map((row) => {
+        const record = asRecord(row);
+        return [
+          requiredText(record, "group_id"),
+          requiredText(record, "user_id"),
+          requiredText(record, "options"),
+        ] as [string, string, string];
+      });
+    const counts: Record<string, CountMap> = {};
+    for (const row of this.storage.sql.exec("SELECT gid, uid, _count FROM group_user").toArray()) {
+      const record = asRecord(row);
+      const raw = record._count;
+      if (typeof raw !== "string") throw new TypeError("group_user._count was not text");
+      counts[`${requiredText(record, "gid")}\0${requiredText(record, "uid")}`] = parseCountMap(raw);
+    }
+    return { keywords, settings, counts };
+  }
 }
 
 interface StoredOptions {
@@ -208,7 +334,7 @@ function writeOptions(
     }
     return;
   }
-  const encoded = JSON.stringify(next);
+  const encoded = pythonDumps(next);
   if (current === null) {
     sql.exec(
       "INSERT INTO user_settings (group_id, user_id, options) VALUES (?, ?, ?)",
@@ -451,20 +577,21 @@ function readKeywordRow(sql: SqlStorage, scopeId: string | null, keyword: string
   return { id, author: optionalText(record, "author"), reply: requiredText(record, "reply") };
 }
 
+function storedKeyword(record: Record<string, unknown>): StoredKeyword {
+  return {
+    scopeId: optionalText(record, "id"),
+    author: optionalText(record, "author"),
+    keyword: requiredText(record, "keyword"),
+    reply: requiredText(record, "reply"),
+    anchor: requiredText(record, "anchor"),
+  };
+}
+
 function readKeywords(sql: SqlStorage): KeywordSnapshot {
   const keywords = sql
     .exec("SELECT id, author, keyword, reply, anchor FROM user_keyword ORDER BY _id")
     .toArray()
-    .map((row) => {
-      const record = asRecord(row);
-      return {
-        scopeId: optionalText(record, "id"),
-        author: optionalText(record, "author"),
-        keyword: requiredText(record, "keyword"),
-        reply: requiredText(record, "reply"),
-        anchor: requiredText(record, "anchor"),
-      };
-    });
+    .map((row) => storedKeyword(asRecord(row)));
   const logs = sql
     .exec("SELECT id, keyword, reply, create_on FROM keywords_logs ORDER BY rowid")
     .toArray()
@@ -478,6 +605,40 @@ function readKeywords(sql: SqlStorage): KeywordSnapshot {
       };
     });
   return { keywords, logs };
+}
+
+export interface GroupUserRow {
+  uid: string;
+  name: string | null;
+  counts: CountMap;
+}
+
+export interface FixtureSlices {
+  keywords: Array<[string | null, string, string]>;
+  settings: Array<[string, string, string]>;
+  counts: Record<string, CountMap>;
+}
+
+function pythonDumps(value: SettingsPatch): string {
+  const parts = Object.keys(value).map((key) => `${pyString(key)}: ${pyPrimitive(value[key] ?? null)}`);
+  return `{${parts.join(", ")}}`;
+}
+
+function pyString(value: string): string {
+  let out = '"';
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (ch === '"') out += '\\"';
+    else if (ch === "\\") out += "\\\\";
+    else if (code < 32 || code > 126) out += `\\u${code.toString(16).padStart(4, "0")}`;
+    else out += ch;
+  }
+  return `${out}"`;
+}
+
+function pyPrimitive(value: string | number | boolean | null): string {
+  if (typeof value === "string") return pyString(value);
+  return JSON.stringify(value);
 }
 
 function anchorOf(keyword: string): string {

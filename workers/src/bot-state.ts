@@ -1,3 +1,4 @@
+import { handleCallback } from "./dispatch";
 import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
 import { applyImportBatch } from "./import-apply";
@@ -20,6 +21,7 @@ import {
   type KeywordSnapshot,
   type KeywordWrite,
   type KeywordWriteStatus,
+  type FixtureSlices,
   type TouchRows,
 } from "./repository";
 import type { SchemaSnapshot } from "./schema";
@@ -59,6 +61,10 @@ export class BotState extends DurableObject<Env> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/import") {
       return this.importRequest(request);
+    }
+    if (request.method === "POST" && url.pathname.startsWith("/callback/")) {
+      await handleCallback(this.repo, request);
+      return new Response("ok");
     }
     if (request.method !== "POST") {
       return new Response("method not allowed", { status: 405 });
@@ -114,6 +120,10 @@ export class BotState extends DurableObject<Env> {
 
   async countSettings(key: SettingsKey): Promise<number> {
     return this.repo.countSettings(parseSettingsKey(key));
+  }
+
+  async fixtureSlices(): Promise<FixtureSlices> {
+    return this.repo.fixtureSlices();
   }
 
   async inspectSchema(): Promise<SchemaSnapshot> {

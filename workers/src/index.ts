@@ -10,6 +10,9 @@ export default {
     if (request.method === "GET" && url.pathname === "/healthz") {
       return new Response("ok");
     }
+    if (request.method === "GET" && url.pathname === "/ping") {
+      return new Response("pong");
+    }
     if (request.method === "POST" && url.pathname === "/import") {
       return forwardImport(request, env);
     }
@@ -22,7 +25,7 @@ export default {
           body,
           signature: request.headers.get("x-line-signature"),
         });
-        if (!ok) return new Response("bad signature", { status: 400 });
+        if (!ok) return new Response(null, { status: 400 });
         const stub = env.BOT_STATE.get(env.BOT_STATE.idFromName(GLOBAL_BOT_STATE));
         const forwarded = new Request(request.url, {
           method: "POST",
