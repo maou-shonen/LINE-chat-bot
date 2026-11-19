@@ -48,14 +48,7 @@ export function upsertKeywordRow(
 ): void {
   const anchor = anchorOf(row.keyword);
   const stored: KeywordRow = { id: row.id, keyword: row.keyword, reply: row.reply, anchor };
-  if (row.id === null) {
-    const at = table.rows.length;
-    table.rows.push(stored);
-    pushIndex(table.byKeyword, row.keyword, at);
-    pushIndex(table.byAnchor, anchor, at);
-    return;
-  }
-  const bucket = idBucket(table, row.id);
+  const bucket = idBucket(table, row.id ?? "");
   const index = bucket.get(row.keyword);
   if (index === undefined) {
     const at = table.rows.length;

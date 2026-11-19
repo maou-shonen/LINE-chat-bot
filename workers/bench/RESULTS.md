@@ -141,3 +141,5 @@ CPU 從 `storage.get` 回來才算，和讀取同一口徑。21 輪。load avera
 匯入把 `putKeywords` 每 1000 列叫一次。不會每批重建。delta 或 pending 達到 32 筆就在該次寫入裡跑一段 compaction，並排 DO alarm，每 10ms 再跑一段，直到回到門檻以下。單段最大 3ms。50929 列這次是 490 段。寫入不會把進行中的 compaction 作廢；段與段之間新增的列留在 delta。
 
 門檻滿的時候，常用字 5000 字熱 p95 6ms、冷第一則 p95 6ms。同一狀態下再寫一筆（含那段 compaction）p95 1ms。
+
+學習、疊加、刪除指令和 import 批次都走同一份 delta。import 寫進的 anchor 若是空白，會補成 code point 版 `anchorOf`，跟學習指令同一份函式。這次合併後重跑：常用字熱/冷 p95 都是 5ms，門檻上的讀取 p95 都是 6ms，寫入 p95 最高 2ms。compaction 單段最大 3ms。

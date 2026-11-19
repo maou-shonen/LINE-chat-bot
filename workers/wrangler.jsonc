@@ -21,7 +21,8 @@
   "env": {
     "staging": {
       "name": "line-chat-bot-staging",
-      "workers_dev": false,
+      // workers.dev only. Do not add linebot.maou.app or any production route.
+      "workers_dev": true,
       "durable_objects": {
         "bindings": [
           {
@@ -29,6 +30,21 @@
             "class_name": "BotState"
           }
         ]
+      },
+      // wrangler does not inherit migrations. Staging needs its own v1 or BotState is not created.
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["BotState"]
+        }
+      ],
+      // invocation_logs records the request URL. Callback paths contain the channel secret.
+      "observability": {
+        "enabled": true,
+        "logs": {
+          "enabled": true,
+          "invocation_logs": false
+        }
       }
     }
   }
