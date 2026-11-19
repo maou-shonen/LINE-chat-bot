@@ -58,7 +58,11 @@ describe("keyword row cache", () => {
       });
     }
     await state.putKeywords(rows);
-    await state.deleteKeyword(rows[3]?.id ?? "group", rows[3]?.keyword ?? "");
+    await state.deleteKeyword({
+      scopeId: rows[3]?.id ?? "group",
+      author: "U",
+      keyword: rows[3]?.keyword ?? "",
+    });
     await state.putKeywords([{
       id: rows[5]?.id ?? "group",
       author: "U",
@@ -92,7 +96,11 @@ describe("keyword row cache", () => {
       if (step.done) break;
     }
     await state.putKeywords([{ id: "group", author: "U", keyword: "pendinganchor", reply: "pending" }]);
-    await state.deleteKeyword("group", rows[7]?.keyword ?? "x");
+    await state.deleteKeyword({
+      scopeId: "group",
+      author: "U",
+      keyword: rows[7]?.keyword ?? "x",
+    });
     const pending = await state.auditKeywordSelect({
       message: "zzpendinganchorzz",
       scopeId: "group",
