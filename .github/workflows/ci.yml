@@ -2,9 +2,9 @@ name: ci
 
 on:
   pull_request:
-    branches: [migrate, master]
+    branches: [migrate, master, migrate-cf-workers]
   push:
-    branches: [migrate, master]
+    branches: [migrate, master, migrate-cf-workers]
 
 permissions:
   contents: read
