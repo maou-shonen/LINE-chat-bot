@@ -2,9 +2,9 @@ name: ci
 
 on:
   pull_request:
-    branches: [migrate, master]
+    branches: [migrate, master, migrate-cf-workers]
   push:
-    branches: [migrate, master]
+    branches: [migrate, master, migrate-cf-workers]
 
 permissions:
   contents: read
@@ -26,7 +26,8 @@ jobs:
 
   image:
     needs: test
-    if: github.event_name == 'push'
+    # Images are published only from master. migrate-cf-workers (and any other branch) runs tests only.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     concurrency:
       group: image-${{ github.ref }}
