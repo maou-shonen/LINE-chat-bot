@@ -4,8 +4,6 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-19",
   "workers_dev": false,
-  // Placeholder only. A real account id belongs in CLOUDFLARE_ACCOUNT_ID, not in git.
-  "account_id": "00000000000000000000000000000000",
   "durable_objects": {
     "bindings": [
       {
@@ -25,7 +23,6 @@
       "name": "line-chat-bot-staging",
       // workers.dev only. Do not add linebot.maou.app or any production route.
       "workers_dev": true,
-      "account_id": "00000000000000000000000000000000",
       "durable_objects": {
         "bindings": [
           {

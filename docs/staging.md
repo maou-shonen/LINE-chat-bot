@@ -16,11 +16,11 @@
 | Durable Object | binding `BOT_STATE`，class `BotState` |
 | Migration | `env.staging.migrations` 的 tag `v1`，`new_sqlite_classes` 是 `BotState`。Wrangler 不繼承頂層 `migrations`，所以寫在 staging 裡 |
 | Observability | `logs.enabled` 為 true，`invocation_logs` 為 false。Invocation log 會記下 request URL，callback path 含 channel secret |
-| `account_id` | 維持 32 個 0。真實帳號用環境變數 `CLOUDFLARE_ACCOUNT_ID`，不要寫進 git |
+| `account_id` | 不寫進 `wrangler.jsonc`。由環境變數 `CLOUDFLARE_ACCOUNT_ID` 提供。設定檔裡的 `account_id` 會蓋過這個變數 |
 
 ## Secret
 
-用 `wrangler secret put --env staging`。不要把值寫進 git，不要印出來。
+不要把值寫進 git，不要印出來。
 
 必須先備好的 secret：
 
@@ -28,7 +28,13 @@
 2. 測試用 LINE channel secret。
 3. 測試用 LINE channel access token。
 
-測試用的 channel secret 與 token 必須來自另開的測試 channel。不得使用正式 channel。
+測試用的 channel secret 與 token 必須來自另開的測試 channel。不得使用正式 channel。這兩項放在 webhook path，不是 wrangler secret。會寫進 Worker 的只有 `IMPORT_SECRET`。
+
+`wrangler secret put` 會立刻建立並部署新版本。不要在下面的 dry-run 之前執行。通過檢查後，由 Cloudflare bot 在獲授權的部署步驟執行：
+
+```bash
+npx wrangler secret put IMPORT_SECRET --env staging
+```
 
 ## 部署前檢查
 
@@ -38,9 +44,9 @@
 npx wrangler deploy --dry-run --env staging
 ```
 
-`--dry-run` 不發布。確認輸出裡的 Worker 名稱是 `line-chat-bot-staging`，有 `BOT_STATE`，migration tag 是 `v1`，而且沒有 `linebot.maou.app`。
+`--dry-run` 不發布。確認輸出裡的 Worker 名稱是 `line-chat-bot-staging`，有 `BOT_STATE`，而且沒有 `linebot.maou.app`。migration tag `v1` 改看 `workers/wrangler.jsonc` 的 `env.staging.migrations`，dry-run 不會印出 migration。
 
-通過之後才由 Cloudflare bot 執行真正的 `wrangler deploy --env staging`。
+通過之後才由 Cloudflare bot 執行上面的 `wrangler secret put`，以及真正的 `wrangler deploy --env staging`。
 
 ## 回滾
 
@@ -59,7 +65,7 @@ Staging 還沒有接上正式 webhook。回滾只影響測試網址。
 | Workers 請求 | 100,000 / 日 | 約 2,600 / 日 |
 | Durable Objects 請求 | 100,000 / 日 | 約 2,600 / 日 |
 | Rows read | 5,000,000 / 日 | 約 310,000 / 日 |
-| Rows written | 100,000 / 日 | 約 7,800 / 日。匯入另計，每日上限扣掉日常後抓 80,000 列 |
+| Rows written | 100,000 / 日 | 約 7,800 / 日。匯入另計，含索引。每日上限扣掉日常後抓 80,000 write units，不是 80,000 筆資料列 |
 | DO duration | 13,000 GB-s / 日 | 最壞整天常駐約 10,800 GB-s。實際應遠低於此 |
 | 儲存 | 5 GB | 匯入前量正式庫大小 |
 

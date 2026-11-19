@@ -30,7 +30,7 @@
 請求約 2,600 次 Worker，加上約 2,600 次 DO。只有需要資料庫的事件才進 DO。各約 3%。
 讀取列約 31 萬/日（6%）。寫入列約 7,800/日（8%）。尖峰 3 倍仍低於 25%。
 DO 時長的最壞情況是整天常駐。86,400 秒乘 0.125 GB 等於 10,800 GB-s，低於 13,000（83%）。實際只在有事件時活著，遠低於此。這是 DO 唯一需要盯的指標。驗收時要量。
-資料匯入的寫入列算額度。每日上限 100k。扣掉日常用量，匯入每天上限抓 80k 列，需要分批。先前估計 4 到 5 天。
+資料匯入的寫入列含索引，算法與 [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) 相同，Durable Object SQLite 沿用這套計費（[Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)）。一列插入算 1，每個被更新的索引再加 1。`schema.ts` 裡 `user_keyword` 有 3 個索引，整數主鍵就是資料列本身、不加；其餘各表 1 個主鍵索引。每日上限 100,000。扣掉約 7,800 日常寫入，匯入每天 80,000 write units。來源列全數匯入（user 43,848、group 4,407、group_user 57,543、keywords_logs 65,415、user_keyword 50,929、user_settings 55,486）、每批 200 列、每批另計 import_batches 的 2 write units 時，合計 659,898，要 9 天。`user_settings` 的空 options 不匯，實際天數可能更少。先前把 80,000 當成資料列、估 4 到 5 天，少算了索引。
 
 ## 選項比較
 
