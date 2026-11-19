@@ -354,7 +354,12 @@ function writeUnits(units: Uint16Array, at: number, text: string): number {
 
 function sliceText(units: Uint16Array, at: number, length: number): string {
   if (length === 0) return "";
-  return String.fromCharCode(...units.subarray(at, at + length));
+  let text = "";
+  for (let i = 0; i < length; i += 1024) {
+    const end = Math.min(length, i + 1024);
+    text += String.fromCharCode(...units.subarray(at + i, at + end));
+  }
+  return text;
 }
 
 function sameText(units: Uint16Array, at: number, length: number, text: string): boolean {
