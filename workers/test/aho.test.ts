@@ -14,7 +14,7 @@ it("matches the sliding-window hit set and survives a blob roundtrip", () => {
 });
 
 function windowHits(anchors: readonly string[], message: string): Set<string> {
-  const lengths = [...new Set(anchors.map((anchor) => anchor.length))];
+  const lengths = [...new Set(anchors.map((anchor) => [...anchor].length))];
   const known = new Set(anchors);
   return new Set(probeNeedles(message, lengths).filter((needle) => needle === "" || known.has(needle)));
 }

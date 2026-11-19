@@ -29,6 +29,28 @@ describe("keyword row cache", () => {
       reply: "@updated",
     }]);
 
+    await state.putKeywords([{ id: "group", author: "U", keyword: "ab**😀😀", reply: "emoji-anchor" }]);
+    const byCodePoint = await state.auditKeywordSelect({
+      message: "zzabzz",
+      scopeId: "group",
+      allReply: false,
+      excludeUrl: false,
+      stripName: false,
+      rng: [],
+    });
+    expect(byCodePoint.memory.join("\n")).toContain("ab**😀😀");
+    expect(byCodePoint.sql.join("\n")).toContain("ab**😀😀");
+    const utf16WouldHit = await state.auditKeywordSelect({
+      message: "😀😀",
+      scopeId: "group",
+      allReply: false,
+      excludeUrl: false,
+      stripName: false,
+      rng: [],
+    });
+    expect(utf16WouldHit.memory.join("\n")).not.toContain("ab**😀😀");
+    expect(utf16WouldHit.sql).toEqual(utf16WouldHit.memory);
+
     await state.measureColdRequest({
       message: "x",
       scopeId: null,

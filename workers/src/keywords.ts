@@ -1,4 +1,4 @@
-// shortcut: 字數用 JS length，非 BMP 會和 Python len 差，遇到 emoji 再改 code point。
+// shortcut: keywordLevel 和 reply.length > 1 仍用 UTF-16。非 BMP 的等級比較再改。
 
 export const PROBE_MESSAGE_LIMIT = 300;
 export const NAME_PREFIX = "愛醬";
@@ -45,8 +45,13 @@ export interface KeywordSelectResult {
 
 export function anchorOf(keyword: string): string {
   let best = "";
+  let bestLen = 0;
   for (const piece of keyword.split("**")) {
-    if (piece.length > best.length) best = piece;
+    const len = [...piece].length;
+    if (len > bestLen) {
+      best = piece;
+      bestLen = len;
+    }
   }
   return best;
 }
@@ -71,12 +76,13 @@ export function normalizeKeywordMessage(message: string, stripName: boolean): st
 }
 
 export function probeNeedles(message: string, lengths: readonly number[]): string[] {
+  const chars = [...message];
   const subs = new Set<string>([""]);
-  const n = message.length;
+  const n = chars.length;
   for (const length of lengths) {
     if (!length || length > n) continue;
     for (let i = 0; i <= n - length; i += 1) {
-      subs.add(message.slice(i, i + length));
+      subs.add(chars.slice(i, i + length).join(""));
     }
   }
   return [...subs];
