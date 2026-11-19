@@ -138,4 +138,6 @@ CPU 從 `storage.get` 回來才算，和讀取同一口徑。21 輪。load avera
 
 冷的 get 是把約 3.4MB 列 blob 讀回來，不計進 CPU。CPU 都是 1ms。
 
-匯入把 `putKeywords` 每 1000 列叫一次。這次不會每批重建。全部寫完之後呼叫 `compactKeywordCache`，直到 `done`。這份 50929 列是 45 段，單段最大 4ms。每段寫下一個 generation 的列切片、或自動機的一段。完成才換 meta、清掉 delta。匯入過程中不要再寫，否則這次 compaction 會作廢重來。
+匯入把 `putKeywords` 每 1000 列叫一次。不會每批重建。delta 或 pending 達到 32 筆就在該次寫入裡跑一段 compaction，並排 DO alarm，每 10ms 再跑一段，直到回到門檻以下。單段最大 3ms。50929 列這次是 490 段。寫入不會把進行中的 compaction 作廢；段與段之間新增的列留在 delta。
+
+門檻滿的時候，常用字 5000 字熱 p95 6ms、冷第一則 p95 6ms。同一狀態下再寫一筆（含那段 compaction）p95 1ms。

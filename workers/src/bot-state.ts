@@ -97,4 +97,9 @@ export class BotState extends DurableObject<Env> {
   async measureKeywordWrite(sample: KeywordWriteSample): Promise<KeywordWriteMeasure> {
     return this.repo.measureKeywordWrite(sample);
   }
+
+  async alarm(): Promise<void> {
+    const step = await this.repo.compactKeywordCache();
+    if (!step.done) await this.ctx.storage.setAlarm(Date.now() + 10);
+  }
 }

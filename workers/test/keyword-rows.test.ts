@@ -4,6 +4,43 @@ import type { BotState } from "../src/bot-state";
 import type { KeywordSelect, RngOp } from "../src/keywords";
 
 describe("keyword row cache", () => {
+  it("matches sql while a compact step is in progress", async () => {
+    const id = env.BOT_STATE.idFromName(`mid-${crypto.randomUUID()}`);
+    const state: DurableObjectStub<BotState> = env.BOT_STATE.get(id);
+    const batch = [];
+    for (let i = 0; i < 4000; i += 1) {
+      batch.push({ id: "g", author: "U", keyword: `hold${i}anchor`, reply: "r" });
+    }
+    await state.putKeywords(batch);
+    const mid = await state.compactKeywordCache();
+    expect(mid.done).toBe(false);
+    expect(mid.ms).toBeLessThan(5);
+    await state.putKeywords([{ id: "g", author: "U", keyword: "duringcompact", reply: "d" }]);
+    const query: KeywordSelect = {
+      message: "zzduringcompactzz",
+      scopeId: "g",
+      allReply: false,
+      excludeUrl: false,
+      stripName: false,
+      rng: [],
+    };
+    const live = await state.auditKeywordSelect(query);
+    expect(live.memory).toEqual(live.sql);
+    expect(live.replies).toEqual(live.sqlReplies);
+    await state.measureColdRequest(query, 1);
+    const cold = await state.auditKeywordSelect(query);
+    expect(cold.memory).toEqual(cold.sql);
+    expect(cold.replies).toEqual(cold.sqlReplies);
+    for (;;) {
+      const step = await state.compactKeywordCache();
+      expect(step.ms).toBeLessThan(5);
+      if (step.done) break;
+    }
+    const after = await state.auditKeywordSelect(query);
+    expect(after.memory).toEqual(after.sql);
+    expect(after.replies).toEqual(after.sqlReplies);
+  });
+
   it("matches the sql candidate order and the fixed-rng reply", async () => {
     const id = env.BOT_STATE.idFromName(`rows-${crypto.randomUUID()}`);
     const state: DurableObjectStub<BotState> = env.BOT_STATE.get(id);

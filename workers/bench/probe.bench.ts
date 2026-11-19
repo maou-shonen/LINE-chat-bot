@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { expect, it } from "vitest";
 import type { BotState } from "../src/bot-state";
 import type { KeywordSelect } from "../src/keywords";
+import { KEYWORD_DELTA_LIMIT } from "../src/repository";
 import { commonChars, commonWeights } from "./char-freq";
 
 const ROW_COUNT = 50_929;
@@ -106,6 +107,36 @@ it("measures probe plus match at production anchor shape", async () => {
     console.log(`WRITE ${item.label} p95=${item.p95.toFixed(2)} max=${item.max.toFixed(2)}`);
     expect(item.p95).toBeLessThan(10);
   }
+
+  for (;;) {
+    const step = await state.compactKeywordCache();
+    if (step.done) break;
+  }
+  const capWrites: number[] = [];
+  for (let i = 0; i < KEYWORD_DELTA_LIMIT + ROUNDS; i += 1) {
+    const sample = await state.measureKeywordWrite({
+      op: "put",
+      id: `cap${i}`,
+      keyword: `capanchor${i}qq`,
+      reply: "c",
+      cold: false,
+    });
+    if (i >= KEYWORD_DELTA_LIMIT - 1) capWrites.push(sample.cpuMs);
+  }
+  const capWrite = summarize("cap-write", capWrites, undefined);
+  console.log(`WRITE at-cap p95=${capWrite.p95.toFixed(2)} max=${capWrite.max.toFixed(2)}`);
+  expect(capWrite.p95).toBeLessThan(10);
+  const capHot: number[] = [];
+  const capQuery = queryFor("freq5000", freqMessage, uniformMessage);
+  for (let i = 0; i < ROUNDS; i += 1) {
+    const result = await state.measureKeywordSelect(capQuery, 1);
+    capHot.push(result.samplesMs[0] ?? Number.NaN);
+  }
+  const capHotSummary = summarize("cap-hot", capHot, undefined);
+  const capCold = coldReport(await state.measureColdRequest(capQuery, ROUNDS));
+  console.log(`READ at-cap hot p95=${capHotSummary.p95.toFixed(2)} cold p95=${capCold.request.p95.toFixed(2)}`);
+  expect(capHotSummary.p95).toBeLessThan(10);
+  expect(capCold.request.p95).toBeLessThan(10);
 
   expect(cold.freq5000?.anchors).toBe(DISTINCT);
   expect(cold.uniform5000?.anchors).toBe(DISTINCT);

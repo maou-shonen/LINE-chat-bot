@@ -435,6 +435,7 @@ interface EncodeGroup {
 }
 
 export interface EncodeJob {
+  source: KeywordStore;
   live: KeywordRow[];
   groups: EncodeGroup[];
   keywords: Array<{ hash: number; index: number }>;
@@ -452,9 +453,10 @@ export interface EncodeJob {
 
 const BUCKETS = 256;
 
-export function startEncodeJob(rows: readonly KeywordRow[]): EncodeJob {
+export function startEncodeJob(source: KeywordStore): EncodeJob {
   return {
-    live: rows as KeywordRow[],
+    source,
+    live: [],
     groups: [],
     keywords: [],
     groupBuckets: Array.from({ length: BUCKETS }, () => []),
@@ -482,11 +484,13 @@ export function stepEncodeJob(job: EncodeJob, budgetMs: number): boolean {
 }
 
 function bucketRows(job: EncodeJob, start: number, budgetMs: number): void {
-  while (job.cursor < job.live.length && performance.now() - start < budgetMs) {
-    const index = job.cursor;
-    const row = job.live[index];
+  const total = storeSize(job.source);
+  while (job.cursor < total && performance.now() - start < budgetMs) {
+    const row = rowAt(job.source, job.cursor);
     job.cursor += 1;
-    if (row === undefined) continue;
+    if (row === null) continue;
+    const index = job.live.length;
+    job.live.push(row);
     const anchor = row.anchor;
     let listed = job.anchorLists.get(anchor);
     if (listed === undefined) {
@@ -500,9 +504,21 @@ function bucketRows(job: EncodeJob, start: number, budgetMs: number): void {
     job.keywordBuckets[keywordHash >>> 24]?.push({ hash: keywordHash, index });
     job.chars += (row.id?.length ?? 0) + row.keyword.length + row.reply.length;
   }
-  if (job.cursor < job.live.length) return;
+  if (job.cursor < total) return;
   job.cursor = 0;
   job.phase = "flatten";
+}
+
+function storeSize(table: KeywordStore): number {
+  if (table.kind === "map") return table.rows.length;
+  if (table.kind === "stored") return table.rowCount;
+  return table.base.rowCount + table.appended.length;
+}
+
+function rowAt(table: KeywordStore, index: number): KeywordRow | null {
+  if (table.kind === "map") return table.rows[index] ?? null;
+  if (table.kind === "stored") return readStoredRow(table, index);
+  return readOverlayRow(table, index);
 }
 
 function flattenBuckets(job: EncodeJob, start: number, budgetMs: number): void {
