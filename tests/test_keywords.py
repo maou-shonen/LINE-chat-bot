@@ -4,9 +4,10 @@ import json
 import random
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import event, text
 
-from app.db import GroupUser, Store, UserKeyword, UserSettings
+from app.db import GroupUser, Store, User, UserKeyword, UserSettings
+from app.handler import EventText
 from app.keywords import anchor_of, full_scan, probe_candidates
 from app.parity import legacy_check, winning_set
 
@@ -173,6 +174,67 @@ def test_group_user_dedupe_keeps_lowest(store):
     with pytest.raises(IntegrityError):
         session.commit()
     session.rollback()
+    session.close()
+
+
+def _group_user_plans(session, fn):
+    captured = []
+
+    def before(conn, cursor, statement, parameters, context, executemany):
+        head = statement.lstrip().upper()
+        if "GROUP_USER" in statement.upper() and (
+                head.startswith("SELECT") or head.startswith("DELETE")):
+            captured.append((statement, parameters))
+
+    event.listen(session.bind, "before_cursor_execute", before)
+    try:
+        fn()
+    finally:
+        event.remove(session.bind, "before_cursor_execute", before)
+    plans = []
+    for statement, parameters in captured:
+        rows = session.connection().exec_driver_sql(
+            "EXPLAIN QUERY PLAN " + statement, parameters).fetchall()
+        plans.append(" ".join(str(r) for r in rows))
+    return plans
+
+
+def test_group_user_handler_queries_use_index(store):
+    session = store.session()
+    user = User("U1")
+    user.name = "粉"
+    session.add(user)
+    session.commit()
+
+    class Ctx:
+        bots = {}
+
+    def drive(message, user_id="U1"):
+        ev = EventText(
+            Ctx(), session, group_id="G1", user_id=user_id,
+            bot_id=None, message=message)
+        if message and message.startswith("回憶"):
+            ev.logs()
+
+    plans = []
+    for message, user_id in (
+            (None, "U1"),
+            (None, None),
+            (None, ""),
+            ("回憶=我", "U1"),
+            ("回憶=排名", "U1"),
+            ("回憶=全部", "U1"),
+            ("回憶=粉", "U1"),
+            ("回憶=清除=粉", "U1"),
+            ("回憶=清除=全部", "U1"),
+    ):
+        plans.extend(_group_user_plans(
+            session, lambda message=message, user_id=user_id: drive(
+                message, user_id)))
+    assert plans, "no group_user queries captured"
+    for plan in plans:
+        assert "SEARCH group_user USING INDEX ux_group_user_gid_uid" in plan, plan
+        assert "SCAN group_user" not in plan, plan
     session.close()
 
 
