@@ -15,6 +15,7 @@ from sqlalchemy import (
     create_engine,
     event,
     func,
+    literal_column,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -231,31 +232,28 @@ class UserSettings(Base):
 
     @staticmethod
     def _lookup(session, group_id, user_id):
-        q = session.query(UserSettings)
-        if group_id is None:
-            q = q.filter(UserSettings.group_id.is_(None))
-        else:
-            q = q.filter(UserSettings.group_id == group_id)
-        if user_id is None:
-            q = q.filter(UserSettings.user_id.is_(None))
-        else:
-            q = q.filter(UserSettings.user_id == user_id)
-        return q.order_by(UserSettings._id).first()
+        empty = literal_column("''")
+        return session.query(UserSettings).filter(
+            func.coalesce(UserSettings.group_id, empty) == (group_id or ""),
+            func.coalesce(UserSettings.user_id, empty) == (user_id or ""),
+        ).order_by(UserSettings._id).first()
 
     @staticmethod
-    def _get(session, group_id, user_id):
+    def _options(session, group_id, user_id):
         row = UserSettings._lookup(session, group_id, user_id)
         if row is None:
-            row = UserSettings(group_id, user_id)
-            session.add(row)
-        return row
+            return {}
+        return json.loads(row.options)
 
     @staticmethod
     def update(session, group_id, user_id, options):
         if type(options) != dict:
             Exception("參數類型錯誤")
 
-        row = UserSettings._get(session, group_id, user_id)
+        row = UserSettings._lookup(session, group_id, user_id)
+        if row is None:
+            row = UserSettings(group_id, user_id)
+            session.add(row)
 
         row_options = json.loads(row.options)
         row_options.update(options)
@@ -263,9 +261,8 @@ class UserSettings(Base):
 
     @staticmethod
     def get(session, group_id, user_id, option, default=None):
-        row = UserSettings._get(session, group_id, user_id)
-
-        return json.loads(row.options).get(option, default)
+        return UserSettings._options(session, group_id, user_id).get(
+            option, default)
 
     @staticmethod
     def show(session, group_id, user_id):
@@ -274,18 +271,16 @@ class UserSettings(Base):
 
         data = ["目前的設定"]
 
-        row = UserSettings._get(session, group_id, None)
         data.append("<群組>")
-        settings = json.loads(row.options)
+        settings = UserSettings._options(session, group_id, None)
         if len(settings) > 0:
             for k, v in settings.items():
                 data.append("%s = %s" % (k, bool2str(v)))
         else:
             data.append("無 (預設)")
 
-        row = UserSettings._get(session, group_id, user_id)
         data.append("<群組中的你>")
-        settings = json.loads(row.options)
+        settings = UserSettings._options(session, group_id, user_id)
         if len(settings) > 0:
             for k, v in settings.items():
                 data.append("%s = %s" % (k, bool2str(v)))

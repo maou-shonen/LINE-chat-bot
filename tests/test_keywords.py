@@ -2,6 +2,8 @@
 import inspect
 import json
 import random
+import subprocess
+import sys
 
 import pytest
 from sqlalchemy import event, text
@@ -194,6 +196,7 @@ def test_user_settings_unique_with_nulls_and_sleep(store):
     session.rollback()
     session.close()
 
+
 def _lookup_plan(session, group_id, user_id):
     captured = []
 
@@ -236,6 +239,39 @@ def test_get_and_show_do_not_insert_empty_rows(store):
     assert UserSettings.get(session, "G1", "", "全回應") is True
     assert session.query(UserSettings).count() == 1
     session.close()
+
+
+def test_purge_empty_settings_is_opt_in(tmp_path):
+    db = tmp_path / "purge.db"
+    store = Store("sqlite:///%s" % db)
+    session = store.session()
+    session.add(UserSettings("G", "U"))
+    UserSettings.update(session, "G", None, {"全回應": True})
+    session.commit()
+    session.close()
+    script = "scripts/purge_empty_user_settings.py"
+    dry = subprocess.run(
+        [sys.executable, script, str(db)], capture_output=True, text=True)
+    assert dry.returncode == 0, dry.stderr
+    assert dry.stdout.strip() == "1"
+    session = store.session()
+    assert session.query(UserSettings).count() == 2
+    session.close()
+    applied = subprocess.run(
+        [sys.executable, script, str(db), "--apply"],
+        capture_output=True, text=True)
+    assert applied.returncode == 0, applied.stderr
+    assert applied.stdout.strip() == "1"
+    session = store.session()
+    rows = session.query(UserSettings).all()
+    assert len(rows) == 1 and rows[0].user_id is None
+    assert json.loads(rows[0].options) == {"全回應": True}
+    session.close()
+    again = subprocess.run(
+        [sys.executable, script, str(db), "--apply"],
+        capture_output=True, text=True)
+    assert again.returncode == 0, again.stderr
+    assert again.stdout.strip() == "0"
 
 
 def test_keyword_unique_pair(store):
