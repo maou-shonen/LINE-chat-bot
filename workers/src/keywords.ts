@@ -1,5 +1,3 @@
-// shortcut: keywordLevel 和 reply.length > 1 仍用 UTF-16。非 BMP 的等級比較再改。
-
 export const PROBE_MESSAGE_LIMIT = 300;
 export const NAME_PREFIX = "愛醬";
 
@@ -167,7 +165,7 @@ export function matchKeyword(
       else return reply;
     } else if (row.keyword.replaceAll("**", "") === message) {
       exact.push(reply);
-    } else if (!flags.allReply || reply.length > 1) {
+    } else if (!flags.allReply || [...reply].length > 1) {
       keys.push([row.keyword, reply]);
     }
   }
@@ -242,7 +240,7 @@ function drawCount(message: string): number {
 }
 
 function keywordLevel(keyword: string): number {
-  return keyword.length
+  return [...keyword].length
     - (keyword.split("**").length - 1)
     - (keyword.startsWith("**") ? 2 : 0)
     - (keyword.endsWith("**") ? 2 : 0);

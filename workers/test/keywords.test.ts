@@ -24,6 +24,25 @@ describe("keyword replies", () => {
     expect(selectKeywordReplies([keyword("a**b", "AB")], query("zaxxb")).replies).toBeNull();
   });
 
+  it("ranks code points, so one emoji loses to four BMP characters", () => {
+    const rows = [keyword("a😀😀**", "emoji"), keyword("abcd**", "ascii")];
+    expect(selectKeywordReplies(rows, query("abcda😀😀qq", choice)).replies).toEqual(["ascii"]);
+  });
+
+  it("drops a one-emoji reply in all-reply mode", () => {
+    const rows = [keyword("long**", "😀"), keyword("long**", "😀😀")];
+    const skipped = selectKeywordReplies([rows[0]!], query("longqq", {
+      allReply: true,
+      rng: [{ op: "choice", index: 0 }],
+    }));
+    expect(skipped.replies).toEqual(["(?)"]);
+    const kept = selectKeywordReplies([rows[1]!], query("longqq", {
+      allReply: true,
+      rng: choice.rng,
+    }));
+    expect(kept.replies).toEqual(["😀😀"]);
+  });
+
   it("keeps the longer wildcard", () => {
     const rows = [keyword("ab**cd", "low"), keyword("abx**cd", "high")];
     expect(selectKeywordReplies(rows, query("abXqqcd", choice)).replies).toEqual(["high"]);
