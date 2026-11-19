@@ -22,7 +22,7 @@
 7. fixture 對接。見下一節。`fixtures/SCHEMA.md` 不存在之前不要寫這支 PR。
 8. 分批匯入。寫入列含索引：一列插入算 1，每個索引再加 1。`user_keyword` 三個索引，整數主鍵不算。每天上限是 Free 100,000 扣掉約 7,800 日常寫入後的 80,000 write units，不是 80,000 筆資料列。以來源列全數匯入、預設每批 200 列估算是 659,898 write units、9 天（空 options 略過會更少）。NULL 範圍改成空字串。`user_settings` 與 `group_user` 丟掉代理鍵 `_id`。`options = '{}'` 的列不要匯。
 
-`keywords_logs` 要不要留，或加保留期限，放在第 4 支 PR 決定。理由是寫入列額度，不是這批能先猜的。
+`keywords_logs` 保留，不加保留期限。理由在 ADR-0002。
 
 ## Fixtures
 
