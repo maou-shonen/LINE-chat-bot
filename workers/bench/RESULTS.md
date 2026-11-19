@@ -83,3 +83,20 @@ load average 0.88、0.61、0.41。
 | 冷啟動後常用字 5000 字 | 65ms | 82ms | 83ms |
 
 常用字拆開仍是掃描 40ms、取列 8ms、比對 2ms。長度 1 和 2 只佔切片成本的一小段。長度 3 到 128 還在，所以沒有低於 10ms。方案 2 加方案 3 之後停在這裡。
+
+## Aho-Corasick
+
+所有長度都走同一台自動機，不再做滑動視窗。anchor 集合變了才整台重建，編成 typed-array blob 放 DO storage。冷啟動只反序列化。這次 blob 是 594360 bytes、1 塊。單筆上限仍是 key 加 value 8MB，超過 1MB 才分塊。最後一次重建（24711 個 anchor）是 8ms，算在寫入路徑，不是讀取路徑。
+
+`performance.now()` 仍是整數毫秒。21 輪。全 0 的 5000 字不再塞 `zzsentinel`。
+
+| 訊息 | 熱 p50 | 熱 p95 | 熱 max | 只反序列化 p95 | 反序列化加第一則 p95 | 該輪 request max |
+| --- | --- | --- | --- | --- | --- | --- |
+| 24 字，0 填充 | 2ms | 3ms | 3ms | 1ms | 4ms | 8ms |
+| 300 字，0 填充 | 2ms | 3ms | 5ms | 1ms | 3ms | 3ms |
+| 1000 字，0 填充 | 2ms | 3ms | 4ms | 1ms | 3ms | 4ms |
+| 5000 字，全 0 | 2ms | 3ms | 3ms | 1ms | 3ms | 3ms |
+| 5000 字，常用字頻率 | 10ms | 11ms | 11ms | 1ms | 10ms | 12ms |
+| 5000 字，均勻 CJK | 4ms | 5ms | 6ms | 0ms | 4ms | 4ms |
+
+常用字拆開是掃描 1ms、取列 8ms、比對 1ms。掃描掉下來了。剩下的是命中 anchor 很多時的 SQL 取列。常用字熱路徑 p95 11ms，沒有低於 10ms。冷路徑第一則的 p95 是 10ms，max 12ms。

@@ -85,7 +85,12 @@ it("measures probe plus match at production anchor shape", async () => {
     cold,
     cache,
   };
-  console.log(JSON.stringify(report));
+  console.log(`CACHE ${cache.buildMs.toFixed(2)}ms bytes=${cache.bytes} chunks=${cache.chunks} anchors=${cache.anchors}`);
+  for (const item of report.hot) console.log(`HOT ${item.label} p50=${item.p50.toFixed(2)} p95=${item.p95.toFixed(2)} max=${item.max.toFixed(2)}`);
+  for (const item of profiles) console.log(`PROFILE ${item.label} scan=${item.scanMs.toFixed(2)} fetch=${item.fetchMs.toFixed(2)} match=${item.matchMs.toFixed(2)}`);
+  for (const [label, item] of Object.entries(cold)) {
+    console.log(`COLD ${label} decode p95=${item.decode.p95.toFixed(2)} request p95=${item.request.p95.toFixed(2)} maxReq=${item.request.max.toFixed(2)}`);
+  }
 
   expect(shape.distinct).toBe(DISTINCT);
   expect(shape.lengths).toHaveLength(66);

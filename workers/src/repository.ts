@@ -239,10 +239,10 @@ export class SqliteBotRepository implements BotRepository {
 
   private async persistProbeCache(): Promise<void> {
     const cache = this.probeCache;
-    const anchors = cache?.anchors;
-    if (cache === undefined || anchors === null || anchors === undefined) {
+    if (cache === null || cache.anchors === null) {
       throw new Error("probe cache anchors are missing");
     }
+    const anchors = cache.anchors;
     const started = performance.now();
     cache.machine = buildAho(anchors);
     const encoded = encodeAho(cache.machine);
