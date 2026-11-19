@@ -14,9 +14,12 @@ import {
 import { ahoHits, buildAho, decodeAho, encodeAho, startAhoBuild, stepAhoBuild, type AhoBuild, type AhoMachine } from "./aho";
 import { applyImportBatch } from "./import-apply";
 import { type ApplyResult, type ImportBatch } from "./import-plan";
+import { renderReply } from "./gacha";
 import {
   anchorOf,
+  matchKeyword,
   normalizeKeywordMessage,
+  playRng,
   selectKeywordReplies as selectFromRows,
   selectKeywordRepliesOpen,
   type KeywordRow,
@@ -75,6 +78,15 @@ export interface BotRepository {
   listKeywords(scopeId: string | null): Promise<string[]>;
   inspectKeywords(): Promise<KeywordSnapshot>;
   importKeywordBatch(batch: ImportBatch): Promise<ApplyResult>;
+  keywordRows(query: KeywordSelect): Promise<KeywordRow[]>;
+  measureKeywordRender(query: KeywordSelect, rounds: number): Promise<KeywordMeasure>;
+  measureColdRender(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure>;
+  setUserName(id: string, name: string): Promise<void>;
+  readGroupWeights(groupId: string): Promise<CountMap>;
+  writeGroupWeight(groupId: string, key: string, value: number): Promise<void>;
+  listGroupUsers(groupId: string): Promise<GroupUserRow[]>;
+  deleteGroupUsers(groupId: string, userId: string | null): Promise<void>;
+  fixtureSlices(): Promise<FixtureSlices>;
 }
 
 export class SqliteBotRepository implements BotRepository {
@@ -256,6 +268,13 @@ export class SqliteBotRepository implements BotRepository {
     return this.runSelect(query);
   }
 
+  async keywordRows(query: KeywordSelect): Promise<KeywordRow[]> {
+    const message = normalizeKeywordMessage(query.message, query.stripName);
+    if (message === "") return [];
+    const cache = await this.readyCache(false);
+    return this.rowsFor(message, query, probeHits(cache, message));
+  }
+
   async measureKeywordSelect(query: KeywordSelect, rounds: number): Promise<KeywordMeasure> {
     if (!Number.isInteger(rounds) || rounds < 1 || rounds > 100) {
       throw new TypeError("rounds out of range");
@@ -293,6 +312,73 @@ export class SqliteBotRepository implements BotRepository {
       replies: selected.replies,
       rowsRead: this.rowsRead,
     };
+  }
+
+  async measureKeywordRender(query: KeywordSelect, rounds: number): Promise<KeywordMeasure> {
+    if (!Number.isInteger(rounds) || rounds < 1 || rounds > 100) {
+      throw new TypeError("rounds out of range");
+    }
+    const samplesMs: number[] = [];
+    let replies: string[] | null = null;
+    let candidates = 0;
+    for (let i = 0; i < rounds; i += 1) {
+      const start = performance.now();
+      const rendered = await this.renderFromRows(query);
+      samplesMs.push(performance.now() - start);
+      replies = rendered.replies;
+      candidates = rendered.candidates;
+    }
+    return { samplesMs, replies, candidates };
+  }
+
+  async measureColdRender(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
+    if (!Number.isInteger(rounds) || rounds < 1 || rounds > 100) {
+      throw new TypeError("rounds out of range");
+    }
+    const decodeMs: number[] = [];
+    const requestMs: number[] = [];
+    let replies: string[] | null = null;
+    let candidates = 0;
+    let anchors = 0;
+    let bytes = 0;
+    let chunks = 0;
+    for (let i = 0; i < rounds; i += 1) {
+      this.probeCache = null;
+      this.compactJob = null;
+      const raw = await this.readRawCache();
+      const rowRaw = await this.readRawRows();
+      const delta = await this.readDeltaOps();
+      const decodeStart = performance.now();
+      this.installCache(raw, rowRaw, delta);
+      const decoded = performance.now();
+      const rendered = await this.renderFromRows(query);
+      requestMs.push(performance.now() - decodeStart);
+      decodeMs.push(decoded - decodeStart);
+      replies = rendered.replies;
+      candidates = rendered.candidates;
+      anchors = this.cacheStats.anchors;
+      bytes = this.cacheStats.bytes + this.cacheStats.rowBytes;
+      chunks = this.cacheStats.chunks + this.cacheStats.rowChunks;
+    }
+    return { decodeMs, requestMs, replies, candidates, anchors, bytes, chunks };
+  }
+
+  private async renderFromRows(query: KeywordSelect): Promise<KeywordSelectResult> {
+    const rows = await this.keywordRows(query);
+    const message = normalizeKeywordMessage(query.message, query.stripName);
+    const rng = playRng(query.rng);
+    const winner = message === "" ? null : matchKeyword(message, rows, query, rng);
+    const replies = winner === null
+      ? null
+      : renderReply({
+        reply: winner,
+        message,
+        userId: "",
+        now: new Date(0),
+        rng,
+      });
+    rng.finish();
+    return { replies, candidates: rows.length };
   }
 
   async measureColdRequest(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
@@ -721,6 +807,88 @@ export class SqliteBotRepository implements BotRepository {
   async inspectKeywords(): Promise<KeywordSnapshot> {
     return readKeywords(this.storage.sql);
   }
+
+  async setUserName(id: string, name: string): Promise<void> {
+    this.storage.sql.exec("UPDATE user SET name = ? WHERE id = ?", name, id);
+  }
+
+  async readGroupWeights(groupId: string): Promise<CountMap> {
+    const row = this.storage.sql.exec(`SELECT _count FROM "group" WHERE id = ?`, groupId).toArray()[0];
+    if (row === undefined) return {};
+    const raw = asRecord(row)._count;
+    if (typeof raw !== "string") throw new TypeError("group._count was not text");
+    return parseCountMap(raw);
+  }
+
+  async writeGroupWeight(groupId: string, key: string, value: number): Promise<void> {
+    this.storage.transactionSync(() => {
+      const current = this.storage.sql.exec(`SELECT _count FROM "group" WHERE id = ?`, groupId).toArray()[0];
+      if (current === undefined) return;
+      const map = parseCountMap(requiredText(asRecord(current), "_count"));
+      map[key] = value;
+      this.storage.sql.exec(`UPDATE "group" SET _count = ? WHERE id = ?`, encodeCountMap(map), groupId);
+    });
+  }
+
+  async listGroupUsers(groupId: string): Promise<GroupUserRow[]> {
+    return this.storage.sql
+      .exec(
+        `SELECT gu.uid AS uid, gu._count AS _count, u.name AS name
+         FROM group_user gu LEFT JOIN user u ON u.id = gu.uid
+         WHERE gu.gid = ? ORDER BY gu.uid`,
+        groupId,
+      )
+      .toArray()
+      .map((row) => {
+        const record = asRecord(row);
+        const raw = record._count;
+        if (typeof raw !== "string") throw new TypeError("group_user._count was not text");
+        const uid = record.uid;
+        if (typeof uid !== "string") throw new TypeError("group_user.uid was not text");
+        return { uid, name: optionalText(record, "name"), counts: parseCountMap(raw) };
+      });
+  }
+
+  async deleteGroupUsers(groupId: string, userId: string | null): Promise<void> {
+    if (userId === null) {
+      this.storage.sql.exec("DELETE FROM group_user WHERE gid = ?", groupId);
+      return;
+    }
+    this.storage.sql.exec("DELETE FROM group_user WHERE gid = ? AND uid = ?", groupId, userId);
+  }
+
+  async fixtureSlices(): Promise<FixtureSlices> {
+    const keywords = this.storage.sql
+      .exec("SELECT id, keyword, reply FROM user_keyword ORDER BY _id")
+      .toArray()
+      .map((row) => {
+        const record = asRecord(row);
+        return [
+          optionalText(record, "id"),
+          requiredText(record, "keyword"),
+          requiredText(record, "reply"),
+        ] as [string | null, string, string];
+      });
+    const settings = this.storage.sql
+      .exec("SELECT group_id, user_id, options FROM user_settings ORDER BY group_id, user_id")
+      .toArray()
+      .map((row) => {
+        const record = asRecord(row);
+        return [
+          requiredText(record, "group_id"),
+          requiredText(record, "user_id"),
+          requiredText(record, "options"),
+        ] as [string, string, string];
+      });
+    const counts: Record<string, CountMap> = {};
+    for (const row of this.storage.sql.exec("SELECT gid, uid, _count FROM group_user").toArray()) {
+      const record = asRecord(row);
+      const raw = record._count;
+      if (typeof raw !== "string") throw new TypeError("group_user._count was not text");
+      counts[`${requiredText(record, "gid")}\0${requiredText(record, "uid")}`] = parseCountMap(raw);
+    }
+    return { keywords, settings, counts };
+  }
 }
 
 interface StoredOptions {
@@ -745,6 +913,41 @@ function readOptions(sql: SqlStorage, key: SettingsKey): StoredOptions | null {
   return { raw, options: parseSettingsPatch(JSON.parse(raw)) };
 }
 
+export interface GroupUserRow {
+  uid: string;
+  name: string | null;
+  counts: CountMap;
+}
+
+export interface FixtureSlices {
+  keywords: Array<[string | null, string, string]>;
+  settings: Array<[string, string, string]>;
+  counts: Record<string, CountMap>;
+}
+
+function pythonDumps(value: SettingsPatch): string {
+  const parts = Object.keys(value).map((key) => `${pyString(key)}: ${pyPrimitive(value[key] ?? null)}`);
+  return `{${parts.join(", ")}}`;
+}
+
+function pyString(value: string): string {
+  let out = '"';
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    const ch = value[i] ?? "";
+    if (ch === '"') out += '\\"';
+    else if (ch === "\\") out += "\\\\";
+    else if (code < 32 || code > 126) out += `\\u${code.toString(16).padStart(4, "0")}`;
+    else out += ch;
+  }
+  return `${out}"`;
+}
+
+function pyPrimitive(value: string | number | boolean | null): string {
+  if (typeof value === "string") return pyString(value);
+  return JSON.stringify(value);
+}
+
 function writeOptions(
   sql: SqlStorage,
   key: SettingsKey,
@@ -761,7 +964,7 @@ function writeOptions(
     }
     return;
   }
-  const encoded = JSON.stringify(next);
+  const encoded = pythonDumps(next);
   if (current === null) {
     sql.exec(
       "INSERT INTO user_settings (group_id, user_id, options) VALUES (?, ?, ?)",

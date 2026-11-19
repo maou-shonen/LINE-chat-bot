@@ -57,6 +57,32 @@ const NON_DECIMAL: ReadonlyArray<readonly [number, number]> = [
 const FLOAT_RE =
   /^(?:(?:\d+_)*\d+(?:\.(?:\d+_)*\d*)?|\.(?:\d+_)*\d+)(?:[eE][+-]?(?:\d+_)*\d+)?$/;
 
+export function randomOrgUrl(reply: string, message: string): string | null {
+  const hash = reply.indexOf("##");
+  const body = hash === -1 ? reply : reply.slice(0, hash);
+  if (!body.includes("__")) return null;
+  const count = drawCount(message);
+  if (count <= 1) return null;
+  let total = 0;
+  for (const segment of body.split("__")) {
+    if (segment === "") continue;
+    let msg = segment;
+    const pct = msg.lastIndexOf("%");
+    if (pct !== -1) {
+      const parsed = pythonFloat(msg.slice(pct + 1));
+      if (parsed !== null) msg = msg.slice(0, pct);
+      total += parsed ?? 1;
+    } else {
+      total += 1;
+    }
+  }
+  const max = truncInt(total);
+  return (
+    `https://www.random.org/integers/?num=${count}&min=0&max=${max}` +
+    "&col=1&base=10&format=plain&rnd=new"
+  );
+}
+
 export function renderReply(input: RenderReplyInput): string[] {
   const opt = new Map<string, string>();
   let body = input.reply;

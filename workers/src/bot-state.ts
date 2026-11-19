@@ -1,3 +1,4 @@
+import { handleCallback } from "./dispatch";
 import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
 import {
@@ -19,6 +20,7 @@ import {
   type KeywordSnapshot,
   type KeywordWrite,
   type KeywordWriteStatus,
+  type FixtureSlices,
   type TouchRows,
   type ColdKeywordMeasure,
   type KeywordAudit,
@@ -68,6 +70,10 @@ export class BotState extends DurableObject<Env> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/import") {
       return this.importRequest(request);
+    }
+    if (request.method === "POST" && url.pathname.startsWith("/callback/")) {
+      await handleCallback(this.repo, request);
+      return new Response("ok");
     }
     if (request.method !== "POST") {
       return new Response("method not allowed", { status: 405 });
@@ -123,6 +129,10 @@ export class BotState extends DurableObject<Env> {
     return this.repo.countSettings(parseSettingsKey(key));
   }
 
+  async fixtureSlices(): Promise<FixtureSlices> {
+    return this.repo.fixtureSlices();
+  }
+
   async inspectSchema(): Promise<SchemaSnapshot> {
     return this.repo.inspectSchema();
   }
@@ -159,6 +169,14 @@ export class BotState extends DurableObject<Env> {
 
   async measureColdRequest(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
     return this.repo.measureColdRequest(query, rounds);
+  }
+
+  async measureKeywordRender(query: KeywordSelect, rounds: number): Promise<KeywordMeasure> {
+    return this.repo.measureKeywordRender(query, rounds);
+  }
+
+  async measureColdRender(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
+    return this.repo.measureColdRender(query, rounds);
   }
 
   async keywordCacheStats(): Promise<KeywordCacheStats> {

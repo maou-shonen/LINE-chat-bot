@@ -2,6 +2,8 @@
 
 列快取之後，六個案例的熱路徑和冷啟動第一則 p95 都低於 7ms。常用字 5000 字熱路徑 p95 是 4ms，冷啟動第一則 p95 是 5ms。每則訊息讀 0 列 SQLite。
 
+`keywordRows` 加 `renderReply` 與 `selectKeywordReplies` 在常用字 5000 字上沒有可量到的差距。21 輪交錯，計時解析度 1ms。熱路徑兩邊 p50、p95、max 都是 5ms。冷啟動請求 p95 是 5ms，max 是 7ms。回覆是 `["hit"]`。同一次的拆分是掃描 1ms、取列 1ms、比對 1ms，`rowsRead` 是 0。`renderReply` 沒有超出這個 1ms 地板。機器 16 核，load average 1.18、0.80、0.73。再跑一次冷啟動 max 是 5ms。
+
 方案 2 和方案 3 之後，常用字 5000 字的熱路徑 p95 仍是 63ms，冷路徑 p95 是 82ms。兩者都超過 Workers Free 10ms。長度 1 的位元圖和長度 2 的 trie 沒有拿掉長度 3 到 128 的滑動視窗，掃描還是約 40ms。下面先記直方圖那一輪。方案 2 和方案 3 在文末。
 
 計時在 Durable Object 裡，用 `performance.now()`。回傳值是整數毫秒。冷啟動從 `storage.get` 回來之後才算。機器 16 核。量測前 load average 是 0.14、0.25、0.27。接著又跑一次。常用字 p50 仍是 51ms。0 填充的 5000 字第二次是 p50 18ms。均勻 CJK 第二次是 p50 6ms。下表是第一次，因為那次有掃描、取列、比對的拆分。

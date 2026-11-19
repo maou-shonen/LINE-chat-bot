@@ -47,6 +47,14 @@ describe("user settings", () => {
     expect(Object.prototype.hasOwnProperty.call(view.options, "__proto__")).toBe(true);
     expect(view.options["__proto__"]).toBe(true);
   });
+
+  it("dumps a non-BMP key as a UTF-16 surrogate pair", async () => {
+    const state = freshState();
+    await state.upsertSettings({ groupId: "C1", userId: "" }, { "😀": true });
+    const raw = (await state.fixtureSlices()).settings.map((row) => row[2]).join("\n");
+    expect(raw).toContain("\\ud83d\\ude00");
+    expect(raw).not.toContain("\\u1f600");
+  });
 });
 
 function freshState(): DurableObjectStub<BotState> {

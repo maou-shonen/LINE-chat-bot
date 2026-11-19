@@ -1,7 +1,7 @@
 export const PROBE_MESSAGE_LIMIT = 300;
 export const NAME_PREFIX = "愛醬";
 
-const UNKNOWN_REPLIES = [
+export const UNKNOWN_REPLIES = [
   "(?)",
   "愛醬不是很懂你說什麼",
   "對不起...愛醬聽不懂",
@@ -25,6 +25,7 @@ export interface KeywordRng {
 
 export type RngOp =
   | { op: "choice"; index: number }
+  | { op: "sample"; indices: number[] }
   | { op: "uniform"; hex: string };
 
 export interface KeywordSelect {
@@ -86,7 +87,10 @@ export function probeNeedles(message: string, lengths: readonly number[]): strin
   return [...subs];
 }
 
-export function playRng(script: readonly RngOp[]): KeywordRng & { finish(): void } {
+export function playRng(script: readonly RngOp[]): KeywordRng & {
+  sample<T>(items: readonly T[], k: number): readonly T[];
+  finish(): void;
+} {
   let index = 0;
   return {
     choice(items) {
@@ -106,6 +110,19 @@ export function playRng(script: readonly RngOp[]): KeywordRng & { finish(): void
         throw new TypeError("rng script missing uniform");
       }
       return floatFromHex(step.hex);
+    },
+    sample<T>(items: readonly T[], k: number): readonly T[] {
+      const step = script[index];
+      index += 1;
+      if (step === undefined || step.op !== "sample") {
+        throw new TypeError("rng script missing sample");
+      }
+      if (step.indices.length !== k) throw new TypeError("rng sample length mismatch");
+      return step.indices.map((at) => {
+        const item = items[at];
+        if (item === undefined) throw new TypeError("rng sample index out of range");
+        return item;
+      });
     },
     finish() {
       if (index !== script.length) throw new TypeError("rng script not exhausted");
