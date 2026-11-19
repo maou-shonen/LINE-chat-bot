@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "line-chat-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BOT_STATE",
+        "class_name": "BotState"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["BotState"]
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "line-chat-bot-staging",
+      "workers_dev": false,
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "BOT_STATE",
+            "class_name": "BotState"
+          }
+        ]
+      }
+    }
+  }
+}
