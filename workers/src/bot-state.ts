@@ -1,6 +1,20 @@
 import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
-import { SqliteBotRepository, type BotRepository } from "./repository";
+import {
+  parseKeywordDelete,
+  parseKeywordLookup,
+  parseKeywordWrite,
+  parseScopeId,
+  SqliteBotRepository,
+  type BotRepository,
+  type KeywordDelete,
+  type KeywordDeleteStatus,
+  type KeywordLookup,
+  type KeywordSnapshot,
+  type KeywordWrite,
+  type KeywordWriteStatus,
+  type TouchRows,
+} from "./repository";
 import type { SchemaSnapshot } from "./schema";
 import {
   parseSettingsKey,
@@ -9,7 +23,6 @@ import {
   type SettingsPatch,
   type SettingsView,
 } from "./settings";
-import type { TouchRows } from "./repository";
 
 export const GLOBAL_BOT_STATE = "global";
 
@@ -67,5 +80,25 @@ export class BotState extends DurableObject<Env> {
 
   async inspectTouch(): Promise<TouchRows> {
     return this.repo.inspectTouch();
+  }
+
+  async upsertKeyword(input: KeywordWrite): Promise<KeywordWriteStatus> {
+    return this.repo.upsertKeyword(parseKeywordWrite(input));
+  }
+
+  async deleteKeyword(input: KeywordDelete): Promise<KeywordDeleteStatus> {
+    return this.repo.deleteKeyword(parseKeywordDelete(input));
+  }
+
+  async getKeyword(input: KeywordLookup): Promise<string | null> {
+    return this.repo.getKeyword(parseKeywordLookup(input));
+  }
+
+  async listKeywords(scopeId: string | null): Promise<string[]> {
+    return this.repo.listKeywords(parseScopeId(scopeId));
+  }
+
+  async inspectKeywords(): Promise<KeywordSnapshot> {
+    return this.repo.inspectKeywords();
   }
 }
