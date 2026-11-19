@@ -350,13 +350,11 @@ async function probe(
 }
 
 async function readUserFlags(repo: BotRepository, groupId: string, userId: string) {
-  await repo.touchSettings({ groupId, userId });
   const flags = await readReplyFlags(repo, { groupId, userId });
   return { 個人詞庫: flags.個人詞庫, 別理我: flags.別理我 };
 }
 
 async function readGroupFlags(repo: BotRepository, groupId: string) {
-  await repo.touchSettings({ groupId, userId: "" });
   const flags = await readReplyFlags(repo, { groupId, userId: null });
   return { 全回應: flags.全回應, 全圖片: flags.全圖片 };
 }

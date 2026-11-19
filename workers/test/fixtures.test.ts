@@ -72,8 +72,8 @@ describe("fixture suite", () => {
       if (step.expect.db?.keywords !== undefined && !same(sortTriples(slices.keywords), step.expect.db.keywords)) {
         failures.push(`${step.name} keywords`);
       }
-      if (step.expect.db?.settings !== undefined && !same(sortTriples(slices.settings), step.expect.db.settings)) {
-        failures.push(`${step.name} settings ${diffRows(sortTriples(slices.settings), step.expect.db.settings)}`);
+      if (step.expect.db?.settings !== undefined && !same(sortTriples(keptSettings(slices.settings)), keptSettings(step.expect.db.settings))) {
+        failures.push(`${step.name} settings ${diffRows(sortTriples(keptSettings(slices.settings)), keptSettings(step.expect.db.settings))}`);
       }
       if (step.expect.db?.counts !== undefined && !same(slices.counts, step.expect.db.counts)) {
         failures.push(`${step.name} counts`);
@@ -166,6 +166,11 @@ function field(body: unknown, key: string): unknown {
 function textField(body: unknown, key: string): string {
   const value = field(body, key);
   return typeof value === "string" ? value : "";
+}
+
+function keptSettings(rows: unknown): Array<readonly unknown[]> {
+  if (!Array.isArray(rows)) return [];
+  return rows.filter((row): row is readonly unknown[] => Array.isArray(row) && row[2] !== "{}");
 }
 
 function sortTriples(rows: ReadonlyArray<readonly unknown[]>): unknown[] {

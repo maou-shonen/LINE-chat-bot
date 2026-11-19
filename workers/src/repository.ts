@@ -14,9 +14,12 @@ import {
 import { ahoHits, buildAho, decodeAho, encodeAho, startAhoBuild, stepAhoBuild, type AhoBuild, type AhoMachine } from "./aho";
 import { applyImportBatch } from "./import-apply";
 import { type ApplyResult, type ImportBatch } from "./import-plan";
+import { renderReply } from "./gacha";
 import {
   anchorOf,
+  matchKeyword,
   normalizeKeywordMessage,
+  playRng,
   selectKeywordReplies as selectFromRows,
   selectKeywordRepliesOpen,
   type KeywordRow,
@@ -76,7 +79,8 @@ export interface BotRepository {
   inspectKeywords(): Promise<KeywordSnapshot>;
   importKeywordBatch(batch: ImportBatch): Promise<ApplyResult>;
   keywordRows(query: KeywordSelect): Promise<KeywordRow[]>;
-  touchSettings(key: SettingsKey): Promise<void>;
+  measureKeywordRender(query: KeywordSelect, rounds: number): Promise<KeywordMeasure>;
+  measureColdRender(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure>;
   setUserName(id: string, name: string): Promise<void>;
   readGroupWeights(groupId: string): Promise<CountMap>;
   writeGroupWeight(groupId: string, key: string, value: number): Promise<void>;
@@ -308,6 +312,73 @@ export class SqliteBotRepository implements BotRepository {
       replies: selected.replies,
       rowsRead: this.rowsRead,
     };
+  }
+
+  async measureKeywordRender(query: KeywordSelect, rounds: number): Promise<KeywordMeasure> {
+    if (!Number.isInteger(rounds) || rounds < 1 || rounds > 100) {
+      throw new TypeError("rounds out of range");
+    }
+    const samplesMs: number[] = [];
+    let replies: string[] | null = null;
+    let candidates = 0;
+    for (let i = 0; i < rounds; i += 1) {
+      const start = performance.now();
+      const rendered = await this.renderFromRows(query);
+      samplesMs.push(performance.now() - start);
+      replies = rendered.replies;
+      candidates = rendered.candidates;
+    }
+    return { samplesMs, replies, candidates };
+  }
+
+  async measureColdRender(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
+    if (!Number.isInteger(rounds) || rounds < 1 || rounds > 100) {
+      throw new TypeError("rounds out of range");
+    }
+    const decodeMs: number[] = [];
+    const requestMs: number[] = [];
+    let replies: string[] | null = null;
+    let candidates = 0;
+    let anchors = 0;
+    let bytes = 0;
+    let chunks = 0;
+    for (let i = 0; i < rounds; i += 1) {
+      this.probeCache = null;
+      this.compactJob = null;
+      const raw = await this.readRawCache();
+      const rowRaw = await this.readRawRows();
+      const delta = await this.readDeltaOps();
+      const decodeStart = performance.now();
+      this.installCache(raw, rowRaw, delta);
+      const decoded = performance.now();
+      const rendered = await this.renderFromRows(query);
+      requestMs.push(performance.now() - decodeStart);
+      decodeMs.push(decoded - decodeStart);
+      replies = rendered.replies;
+      candidates = rendered.candidates;
+      anchors = this.cacheStats.anchors;
+      bytes = this.cacheStats.bytes + this.cacheStats.rowBytes;
+      chunks = this.cacheStats.chunks + this.cacheStats.rowChunks;
+    }
+    return { decodeMs, requestMs, replies, candidates, anchors, bytes, chunks };
+  }
+
+  private async renderFromRows(query: KeywordSelect): Promise<KeywordSelectResult> {
+    const rows = await this.keywordRows(query);
+    const message = normalizeKeywordMessage(query.message, query.stripName);
+    const rng = playRng(query.rng);
+    const winner = message === "" ? null : matchKeyword(message, rows, query, rng);
+    const replies = winner === null
+      ? null
+      : renderReply({
+        reply: winner,
+        message,
+        userId: "",
+        now: new Date(0),
+        rng,
+      });
+    rng.finish();
+    return { replies, candidates: rows.length };
   }
 
   async measureColdRequest(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
@@ -737,18 +808,6 @@ export class SqliteBotRepository implements BotRepository {
     return readKeywords(this.storage.sql);
   }
 
-  async touchSettings(key: SettingsKey): Promise<void> {
-    this.storage.transactionSync(() => {
-      if (readOptions(this.storage.sql, key) !== null) return;
-      this.storage.sql.exec(
-        "INSERT INTO user_settings (group_id, user_id, options) VALUES (?, ?, ?)",
-        key.groupId,
-        key.userId,
-        "{}",
-      );
-    });
-  }
-
   async setUserName(id: string, name: string): Promise<void> {
     this.storage.sql.exec("UPDATE user SET name = ? WHERE id = ?", name, id);
   }
@@ -873,8 +932,9 @@ function pythonDumps(value: SettingsPatch): string {
 
 function pyString(value: string): string {
   let out = '"';
-  for (const ch of value) {
-    const code = ch.codePointAt(0) ?? 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    const ch = value[i] ?? "";
     if (ch === '"') out += '\\"';
     else if (ch === "\\") out += "\\\\";
     else if (code < 32 || code > 126) out += `\\u${code.toString(16).padStart(4, "0")}`;

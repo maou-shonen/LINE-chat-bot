@@ -87,6 +87,27 @@ it("measures probe plus match at production anchor shape", async () => {
     cache,
   };
   console.log(`CACHE ${cache.buildMs.toFixed(2)}ms bytes=${cache.bytes} chunks=${cache.chunks} anchors=${cache.anchors} rowBytes=${cache.rowBytes} rowChunks=${cache.rowChunks}`);
+  const freqQuery = queryFor("freq5000", freqMessage, uniformMessage);
+  const selectHot: number[] = [];
+  const renderHot: number[] = [];
+  for (let round = 0; round < ROUNDS; round += 1) {
+    const selected = await state.measureKeywordSelect(freqQuery, 1);
+    const rendered = await state.measureKeywordRender(freqQuery, 1);
+    selectHot.push(selected.samplesMs[0] ?? Number.NaN);
+    renderHot.push(rendered.samplesMs[0] ?? Number.NaN);
+    if (JSON.stringify(rendered.replies) !== JSON.stringify(selected.replies)) {
+      throw new Error(`render replies diverged ${JSON.stringify(rendered.replies)} vs ${JSON.stringify(selected.replies)}`);
+    }
+  }
+  const renderCold = coldReport(await state.measureColdRender(freqQuery, ROUNDS));
+  const selectSide = summarize("select", selectHot, undefined);
+  const renderSide = summarize("render", renderHot, undefined);
+  console.log(`RENDER freq5000 hot p50=${renderSide.p50.toFixed(2)} p95=${renderSide.p95.toFixed(2)} max=${renderSide.max.toFixed(2)} select p95=${selectSide.p95.toFixed(2)}`);
+  console.log(`RENDER freq5000 cold request p95=${renderCold.request.p95.toFixed(2)} max=${renderCold.request.max.toFixed(2)} replies=${JSON.stringify(renderCold.request.replies)}`);
+  expect(renderSide.p95).toBeLessThan(10);
+  expect(renderCold.request.p95).toBeLessThan(10);
+  expect(renderCold.request.replies).not.toBeNull();
+
   for (const item of report.hot) console.log(`HOT ${item.label} p50=${item.p50.toFixed(2)} p95=${item.p95.toFixed(2)} max=${item.max.toFixed(2)}`);
   for (const item of profiles) {
     console.log(`PROFILE ${item.label} scan=${item.scanMs.toFixed(2)} fetch=${item.fetchMs.toFixed(2)} match=${item.matchMs.toFixed(2)} rowsRead=${item.rowsRead}`);

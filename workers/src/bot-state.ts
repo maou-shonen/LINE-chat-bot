@@ -171,6 +171,14 @@ export class BotState extends DurableObject<Env> {
     return this.repo.measureColdRequest(query, rounds);
   }
 
+  async measureKeywordRender(query: KeywordSelect, rounds: number): Promise<KeywordMeasure> {
+    return this.repo.measureKeywordRender(query, rounds);
+  }
+
+  async measureColdRender(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
+    return this.repo.measureColdRender(query, rounds);
+  }
+
   async keywordCacheStats(): Promise<KeywordCacheStats> {
     return this.repo.keywordCacheStats();
   }
