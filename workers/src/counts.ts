@@ -140,7 +140,7 @@ function textDelta(text: string): CountMap {
   if (text.length === 0) return {};
   const normalized = text.replaceAll('"', "\uFF02").replaceAll("'", "\u2019").replaceAll(";", "\uFF1B");
   const parsed = parseOrder(normalized);
-  const effect = ORDER[parsed.order];
+  const effect = Object.hasOwn(ORDER, parsed.order) ? ORDER[parsed.order] : undefined;
   switch (effect) {
     case "skip":
       return {};

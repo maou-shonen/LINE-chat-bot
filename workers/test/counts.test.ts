@@ -119,6 +119,15 @@ describe("message counts", () => {
     expect(counts["C6\0"]).toEqual({ 貼圖: 1 });
   });
 
+  it("counts the word constructor as chat, not the inherited property", async () => {
+    const state = freshState();
+    await state.recordMessage(
+      { kind: "text", text: "constructor", source: { userId: "U1", groupId: "C1" } },
+      NOW,
+    );
+    expect((await state.inspectTouch()).counts["C1\0U1"]).toEqual({ 對話: 1, 髒話: 0, 字數: 11 });
+  });
+
   it("rejects a message that is not text, sticker, or image", () => {
     expect(() =>
       parseCountMessage({ kind: "postback", source: { userId: "U1", groupId: "C1" } }),
