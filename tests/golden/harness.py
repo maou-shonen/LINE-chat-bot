@@ -1,26 +1,10 @@
-"""Boot + mocks + webhook driver for the FastAPI app.
+"""Boot the FastAPI app with synthetic settings and mocked outbound HTTP.
 
-Drives POST /callback/<secret>/<token> exactly as LINE does — signed
-bodies — and records the exact outbound LINE payloads plus key DB
-effects into golden.json. Same scenarios.yaml as the legacy harness;
-the contract is (HTTP status, reply/push payloads, requested DB
-slices), not internals.
-
-Outbound interception happens at the httpx transport layer: the
-FastAPI TestClient talks to the app via ASGITransport while a
-MockTransport answers every outbound call (LINE API, data API, Safe
-Browsing, random.org, HEAD checks, imgur upload) and records the
-LINE-bound payloads into `Harness.calls`.
-
-Determinism: `random.seed` is reset before every scenario step, the
-queue is drained before reading `calls`, and wall-clock `datetime.now`
-is frozen at 2023-11-14 22:13:20 UTC. `sleep` is no-op'd upstream so
-no retry sleeps slow the suite.
+The fixture file owns the clock, fake LINE secret, and mock constants.
+This module only applies them. Signing and scenario order live in fixture.py.
 """
 import base64
 import copy
-import hashlib
-import hmac
 import json
 import os
 import tempfile
@@ -29,13 +13,8 @@ from datetime import datetime
 
 import httpx
 
-GOLDEN_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(os.path.dirname(GOLDEN_DIR))
-
-SECRET = "golden-secret"
-TOKEN = "golden-token"
-
-FROZEN_NOW = datetime(2023, 11, 14, 22, 13, 20)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
 
 
 class Harness:
@@ -45,9 +24,11 @@ class Harness:
         self.random_org = None
         self.safe_browsing = "clean"
         self.client = None
+        self.cfg = None
 
-    def boot(self):
-        os.environ["TZ"] = "UTC"
+    def boot(self, cfg):
+        self.cfg = cfg
+        os.environ["TZ"] = cfg["tz"]
         _time.tzset()
         from fastapi.testclient import TestClient
 
@@ -70,18 +51,19 @@ class Harness:
         )
         harness = self
 
+        def _head_type(url):
+            if url in harness.head_map:
+                return harness.head_map[url]
+            for suffix, content_type in cfg["head_defaults"]:
+                if url.endswith(suffix):
+                    return content_type
+            return cfg["head_fallback"]
+
         def _mock_handler(request):
             url = str(request.url)
             if request.method == "HEAD":
-                if url in harness.head_map:
-                    ct = harness.head_map[url]
-                elif url.endswith((".jpg", ".jpeg")):
-                    ct = "image/jpeg"
-                elif url.endswith(".png"):
-                    ct = "image/png"
-                else:
-                    ct = "text/html"
-                return httpx.Response(200, headers={"content-type": ct})
+                return httpx.Response(
+                    200, headers={"content-type": _head_type(url)})
             if "random.org" in url:
                 import re
                 m = re.search(r"num=(\d+)", url)
@@ -101,13 +83,11 @@ class Harness:
                 return httpx.Response(200, json=payload)
             if "api.imgur.com" in url:
                 return httpx.Response(
-                    200, json={"data": {
-                        "link": "https://i.imgur.com/golden.jpg"}})
+                    200, json={"data": {"link": cfg["imgur_link"]}})
             if url.endswith("/v2/bot/message/reply"):
                 payload = json.loads(request.content.decode())
                 harness.calls.append(
-                    ["reply", payload["replyToken"],
-                     payload["messages"]])
+                    ["reply", payload["replyToken"], payload["messages"]])
                 return httpx.Response(200, json={})
             if url.endswith("/v2/bot/message/push"):
                 payload = json.loads(request.content.decode())
@@ -116,11 +96,12 @@ class Harness:
                 return httpx.Response(200, json={})
             if "/v2/bot/group/" in url and "/member/" in url:
                 return httpx.Response(
-                    200, json={"displayName": "ProbeUser"})
+                    200, json={"displayName": cfg["profile_display_name"]})
             if "/v2/bot/room/" in url and "/member/" in url:
-                return httpx.Response(404, json={})
+                return httpx.Response(cfg["room_profile_status"], json={})
             if "/v2/bot/message/" in url and url.endswith("/content"):
-                return httpx.Response(200, content=b"fake-image-bytes")
+                return httpx.Response(
+                    200, content=base64.b64decode(cfg["image_content_b64"]))
             raise AssertionError("blocked outbound: %s %s" % (
                 request.method, url))
 
@@ -140,10 +121,10 @@ class Harness:
         finally:
             app_mod.httpx.Client = orig_client  # type: ignore
         state = fastapi_app.state.app_state
-        state.http = orig_client(
-            timeout=10.0, transport=mock_transport)
+        state.http = orig_client(timeout=10.0, transport=mock_transport)
         state.ctx.http = state.http
         orig_factory = state.ctx.line_client_factory
+        dns_ip = cfg["dns_ipv4"]
 
         def _mock_factory(token):
             client = orig_factory(token)
@@ -153,14 +134,16 @@ class Harness:
             client.probe_client = orig_client(
                 timeout=5.0, transport=mock_transport,
                 follow_redirects=False)
-            client.resolver = lambda host, port: [
-                (2, 1, 6, "", ("93.184.216.34", port))]
+            client.resolver = lambda host, port, ip=dns_ip: [
+                (2, 1, 6, "", (ip, port))]
             return client
 
         state.ctx.line_client_factory = _mock_factory
         state.bots.clear()
-        state.ctx.time_now = staticmethod(lambda: FROZEN_NOW)
-        state.ctx.epoch = staticmethod(lambda: 1700000000.0)
+        frozen = datetime.fromisoformat(cfg["frozen_now"])
+        epoch = cfg["epoch"]
+        state.ctx.time_now = staticmethod(lambda frozen=frozen: frozen)
+        state.ctx.epoch = staticmethod(lambda epoch=epoch: epoch)
 
         self.app = fastapi_app
         self.state = state
@@ -171,31 +154,20 @@ class Harness:
         self.run_dir = run
         return self
 
+    def set_epoch(self, epoch):
+        self.state.ctx.epoch = staticmethod(lambda epoch=epoch: epoch)
+
     def _drain(self):
         async def _join():
             await self.state.queue.join()
         self._tc.portal.call(_join)
 
-    def webhook(self, event, secret=SECRET, token=TOKEN):
-        import json as _json
-        body = _json.dumps({"destination": "Udeadbeef",
-                            "events": [event]}, separators=(",", ":"))
-        sig = base64.b64encode(hmac.new(
-            secret.encode(), body.encode(), hashlib.sha256).digest()).decode()
-        resp = self.client.post(
-            "/callback/%s/%s" % (secret, token), content=body,
-            headers={"Content-Type": "application/json",
-                     "X-Line-Signature": sig})
-        self._drain()
-        return resp
-
-    def raw_post(self, body, secret=SECRET, token=TOKEN, signature=None):
-        headers = {"Content-Type": "application/json"}
-        if signature is not None:
-            headers["X-Line-Signature"] = signature
-        resp = self.client.post(
-            "/callback/%s/%s" % (secret, token), content=body,
-            headers=headers)
+    def send(self, request):
+        kwargs = {"headers": dict(request.get("headers") or {})}
+        if request.get("body") is not None:
+            kwargs["content"] = request["body"]
+        resp = self.client.request(
+            request["method"], request["path"], **kwargs)
         self._drain()
         return resp
 

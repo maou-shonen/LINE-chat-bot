@@ -2,10 +2,7 @@
 
 ## What
 
-`tests/golden/` drives the app exactly as LINE does — signed
-`POST /callback/<secret>/<token>` bodies — and records the exact outbound
-LINE payloads plus key DB effects into `golden.json`. The contract is
-(HTTP status, reply/push payloads, requested DB slices), not internals.
+`fixtures/suite.json` is the contract Python and TypeScript share. Each step is a signed webhook request, scripted RNG draws, and the expected HTTP result, LINE payloads, and DB slices. Format details are in `fixtures/SCHEMA.md`.
 
 ## Run
 
@@ -15,51 +12,26 @@ From the repo root:
 uv run pytest -q
 ```
 
-Single scenario subset (pytest `-k` matches the assertion message):
+## Regenerate expects
 
-```sh
-uv run pytest tests/golden/test_golden.py -q -k sleep
-```
-
-## Regenerate the golden (review every diff first, never blindly)
+Review the diff before committing. Do not regen blindly.
 
 ```sh
 REGEN_GOLDEN=1 uv run pytest tests/golden/test_golden.py -q
-git diff tests/golden/golden.json   # read all of it before committing
+git diff fixtures/suite.json
 ```
+
+Regen rewrites `request`, `rng`, and `expect` from the authoring fields. A normal pytest replays `rng` and does not use `seed`.
 
 ## Layout
 
-- `scenarios.yaml` — DATA: 111 ordered webhook steps (see header comment).
-  Step `kind` is `text` (group/room/1:1), `sticker`, `image`, `follow`,
-  `unfollow`, `join`, `leave`, `postback`, `ping`, `bad_signature`,
-  `missing_signature`. Per-step `head_map` / `random_org` / `safe_browsing`
-  control the mocked outbound HTTP for that step; `seed` reseeds `random`.
-- `golden.json` — captured `(status, calls, db)` per scenario. `calls` are
-  `["reply"|"push", target, [exact LINE message dicts]]`; `db` slices are
-  `keywords` / `settings` / `counts` where behavior needs them.
-- `harness.py` — boots the FastAPI app with synthetic `Settings`
-  (SQLite temp DB, fake keys) and intercepts outbound HTTP at the httpx
-  transport layer: LINE reply/push (recorded as the exact JSON sent),
-  profile lookups (fixed display name `ProbeUser`), content download
-  (fixed bytes for the 1:1 image→imgur path), `HEAD` image checks
-  (content-type per URL suffix unless the scenario overrides it via
-  `head_map`), random.org multi-draw (scenario-controlled integers via
-  `random_org`, defaulting to deterministic zeros), Google Safe Browsing
-  (scenario-controlled via `safe_browsing`: `clean` or `threat`), imgur
-  upload (returns a fixed `https:` URL). Wall clock frozen at
-  2023-11-14 22:13:20 UTC (TZ pinned to UTC: the sleep-until timestamp is
-  the only wall-clock value in goldens); `random.seed` reset per step.
-- `test_runtime.py` — focused unit tests with literal expected values:
-  signature verify (valid/missing/bad → 200/400/400),
-  ACK-before-processing (a slow handler must not delay the 200), queue
-  ordering, and LINE client request shapes (literal JSON + headers).
+- `fixtures/suite.json` is the ordered suite. One shared SQLite database. Do not reorder steps without regenerating.
+- `fixtures/SCHEMA.md` documents the signature, mocks, RNG script, and DB slices.
+- `tests/golden/harness.py` boots the app and mocks outbound HTTP.
+- `tests/golden/fixture.py` loads the suite, signs requests, and replays RNG.
+- `tests/test_runtime.py` covers signature verify, ACK-before-processing, queue order, and LINE client request shapes.
 
 ## Known legacy quirks (fixed in the FastAPI rewrite)
 
-- `missing_signature` → **400** (legacy Flask raised raw `KeyError` → 500).
-- `opinion_500` → **200** with a polite reply: `意見` pushes to
-  `DEVELOPER_USER_ID` via `DEVELOPER_BOT_TOKEN` when both are set,
-  otherwise replies that feedback isn't configured. (Legacy `push_developer`
-  needed `bots['admin']`, which was never created → 500.) Same rule for the
-  `check()` error report: push when configured, else log a warning.
+- `missing_signature` returns **400**. Legacy Flask raised a raw `KeyError` and returned 500.
+- `opinion_500` returns **200** with a polite reply. `意見` pushes to `DEVELOPER_USER_ID` via `DEVELOPER_BOT_TOKEN` when both are set, otherwise replies that feedback is not configured. Legacy `push_developer` needed `bots['admin']`, which was never created, so it returned 500. The same rule applies to the `check()` error report. Push when configured, otherwise log a warning.
