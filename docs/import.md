@@ -26,7 +26,7 @@ Node 需要 22.13 或更新，因為腳本用 `node:sqlite` 的唯讀開啟。
 
 ## 使用者同意之後
 
-先由 Cloudflare bot 在 staging 設定 secret。值不要寫進 git。`wrangler.jsonc` 裡的 `IMPORT_SECRET` 是空字串，空字串會讓 `POST /import` 回 404。
+先由 Cloudflare bot 在 staging 設定 secret。值不要寫進 git，也不要寫進 `wrangler.jsonc`。同名的 var 會和 `wrangler secret` 衝突。沒有設定 `IMPORT_SECRET` 時，`POST /import` 回 404。
 
 ```bash
 npx wrangler secret put IMPORT_SECRET --env staging

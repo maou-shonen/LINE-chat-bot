@@ -1,6 +1,6 @@
 import { createExecutionContext, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src";
 import type { BotState } from "../src/bot-state";
 import { GLOBAL_BOT_STATE } from "../src/bot-state";
@@ -16,23 +16,59 @@ import type { SchemaSnapshot } from "../src/schema";
 const SECRET = "test-import-secret";
 
 describe("import gate", () => {
-  it("rejects a wrong secret before any import table exists", async () => {
-    expect(importGate("", SECRET)).toBe("disabled");
-    expect(importGate(SECRET, "other")).toBe("reject");
-    const response = await postImport(
-      { batchId: "user:0:1", rows: [userRow("U-secret")] },
-      "other",
-    );
-    expect(response.status).toBe(401);
-    expect(await response.text()).not.toContain(SECRET);
+  beforeEach(() => {
+    env.IMPORT_SECRET = SECRET;
+  });
 
-    const stub = env.BOT_STATE.get(env.BOT_STATE.idFromName(GLOBAL_BOT_STATE));
-    const names = await runInDurableObject(stub, (_instance, state) =>
+  it("returns 404 when unset, 401 when wrong, and 200 when the secret matches", async () => {
+    expect(importGate(undefined, SECRET)).toBe("disabled");
+    expect(importGate("", "other")).toBe("disabled");
+    expect(importGate(SECRET, null)).toBe("reject");
+    expect(importGate(SECRET, "other")).toBe("reject");
+    expect(importGate(SECRET, SECRET)).toBe("ok");
+
+    env.IMPORT_SECRET = undefined;
+    const unsetWorker = await postImport(userBatch("unset-worker"), SECRET);
+    expect(unsetWorker.status).toBe(404);
+    const unsetStub = freshStub();
+    const unsetDo = await postStub(unsetStub, userBatch("unset-do"), SECRET);
+    expect(unsetDo.status).toBe(404);
+    expect(
+      await runInDurableObject(unsetStub, (_instance, state) =>
+        state.storage.sql
+          .exec("SELECT name FROM sqlite_master WHERE name = 'import_batches'")
+          .toArray(),
+      ),
+    ).toEqual([]);
+
+    env.IMPORT_SECRET = SECRET;
+    const wrongWorker = await postImport(userBatch("wrong-worker"), "other");
+    expect(wrongWorker.status).toBe(401);
+    expect(await wrongWorker.text()).not.toContain(SECRET);
+    const wrongStub = freshStub();
+    const wrongDo = await postStub(wrongStub, userBatch("wrong-do"), "other");
+    expect(wrongDo.status).toBe(401);
+    expect(await wrongDo.text()).not.toContain(SECRET);
+    expect(
+      await runInDurableObject(wrongStub, (_instance, state) =>
+        state.storage.sql
+          .exec("SELECT name FROM sqlite_master WHERE name = 'import_batches'")
+          .toArray(),
+      ),
+    ).toEqual([]);
+
+    const okWorker = await postImport(userBatch("ok-worker"), SECRET);
+    expect(okWorker.status).toBe(200);
+    const okDo = await postStub(freshStub(), userBatch("ok-do"), SECRET);
+    expect(okDo.status).toBe(200);
+
+    const global = env.BOT_STATE.get(env.BOT_STATE.idFromName(GLOBAL_BOT_STATE));
+    const names = await runInDurableObject(global, (_instance, state) =>
       state.storage.sql
-        .exec("SELECT name FROM sqlite_master WHERE name = 'import_batches'")
+        .exec("SELECT batch_id FROM import_batches ORDER BY batch_id")
         .toArray(),
     );
-    expect(names).toEqual([]);
+    expect(names).toEqual([{ batch_id: "user:ok-worker" }]);
   });
 
   it("inserts a batch once and reports the same write units on a replay", async () => {
@@ -47,6 +83,10 @@ describe("import gate", () => {
 });
 
 describe("import batch", () => {
+  beforeEach(() => {
+    env.IMPORT_SECRET = SECRET;
+  });
+
   it("keeps null keyword ids distinct, stores an empty scope, and rolls back a conflict", async () => {
     const stub = freshStub();
     const keyword = await postStub(stub, {
@@ -139,6 +179,10 @@ function userRow(id: string): { table: "user"; values: Record<string, string | n
   return { table: "user", values: { id, name: null, create_on: null, update_on: null } };
 }
 
+function userBatch(id: string): { batchId: string; rows: ReturnType<typeof userRow>[] } {
+  return { batchId: `user:${id}`, rows: [userRow(id)] };
+}
+
 function keywordRow(
   id: number,
   scope: string | null,
@@ -176,14 +220,14 @@ async function postImport(body: unknown, secret: string | null): Promise<Respons
 async function postStub(
   stub: DurableObjectStub<BotState>,
   body: unknown,
+  secret: string | null = SECRET,
 ): Promise<Response> {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (secret !== null) headers.set("x-import-secret", secret);
   return stub.fetch(
     new Request("http://example.com/import", {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-import-secret": SECRET,
-      },
+      headers,
       body: JSON.stringify(body),
     }),
   );

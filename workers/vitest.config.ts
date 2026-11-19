@@ -8,11 +8,6 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
-      miniflare: {
-        bindings: {
-          IMPORT_SECRET: "test-import-secret",
-        },
-      },
     }),
   ],
 });

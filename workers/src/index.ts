@@ -41,7 +41,7 @@ async function forwardImport(request: Request, env: Env): Promise<Response> {
   const presented = request.headers.get(IMPORT_SECRET_HEADER);
   const gate = importGate(env.IMPORT_SECRET, presented);
   if (gate === "disabled") return new Response("not found", { status: 404 });
-  if (gate === "reject" || presented === null) {
+  if (gate !== "ok" || presented === null) {
     return new Response("unauthorized", { status: 401 });
   }
   const body = await request.arrayBuffer();

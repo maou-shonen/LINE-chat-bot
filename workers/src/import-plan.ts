@@ -1,3 +1,14 @@
+declare global {
+  interface Env {
+    IMPORT_SECRET?: string;
+  }
+  namespace Cloudflare {
+    interface Env {
+      IMPORT_SECRET?: string;
+    }
+  }
+}
+
 export const IMPORT_SECRET_HEADER = "x-import-secret";
 export const DAILY_WRITE_LIMIT = 80_000;
 export const DEFAULT_BATCH_SIZE = 200;
@@ -154,8 +165,8 @@ export function importGate(
   presented: string | null,
 ): "disabled" | "reject" | "ok" {
   if (expected === undefined || expected.length === 0) return "disabled";
-  if (presented === null || presented.length === 0) return "reject";
-  return timingSafeEqual(expected, presented) ? "ok" : "reject";
+  // An empty header still runs the compare. Returning first would be faster than a wrong secret.
+  return timingSafeEqual(expected, presented ?? "") ? "ok" : "reject";
 }
 
 export function quoteIdent(name: string): string {
