@@ -1,0 +1,11 @@
+ts	phase	decision	why	evidence	result
+2026-11-19T06:43:34Z	start	started the fixture migration in this run	no earlier decision log in this worktree	fixtures/decisions.tsv	open
+2026-11-19T06:43:34Z	frame	done means pytest reads fixtures/suite.json, the first 111 steps match the old golden, and new gap steps replay from the RNG script	the TypeScript port must compare the same file without reimplementing Python random	fixtures/SCHEMA.md	tests pending
+2026-11-19T06:43:34Z	design	stored the signed HTTP request and a choice/sample/uniform script, and ignored seed at replay	a seed would force TypeScript to reimplement CPython random, which the brief forbids	tests/golden/fixture.py	kept
+2026-11-19T06:43:34Z	design	did not spawn a second design agent	the brief forbids starting more agents	briefs/a-fixtures.md	skipped arena
+2026-11-19T06:41:35Z	parity	recorded the original 111 steps and compared status, calls, and db to tests/golden/golden.json	prove the new runner did not change the old contract before adding steps	/tmp/build_suite.py parity ok 111	matched
+2026-11-19T06:41:35Z	coverage	appended 73 steps and replayed all 184 from the script	lock aliases, the 10000 draw clamp, the over-300 probe, and a valid signature	fixtures/suite.json	replay matched
+2026-11-19T06:43:34Z	bugs	did not change app/	the brief says record bugs, do not fix them	settings_help_allimage reply text	noted in PR body
+2026-11-19T06:44:47Z	verify	ruff and pytest passed on the JSON suite	the check has to run the app, not just compile	uv run ruff check . && uv run pytest -q	53 passed
+2026-11-19T06:44:47Z	audit	skipped the independent trail reviewer	the brief forbids starting more agents	briefs/a-fixtures.md	open
+2026-11-19T06:44:47Z	parity	the parity evidence is the parent commit, not the deleted temp script	the reviewer cannot open /tmp/build_suite.py	1aa0b2b:tests/golden/golden.json	supersedes the /tmp pointer

@@ -6,8 +6,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "typecheck": "wrangler types src/worker-configuration.d.ts && tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json",
-    "test": "vitest run && node --experimental-strip-types scripts/compare-golden.ts"
+    "typecheck": "wrangler types src/worker-configuration.d.ts && tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p scripts/tsconfig.json",
+    "test": "vitest run && node --experimental-strip-types scripts/compare-golden.ts && node --experimental-strip-types --test scripts/import-sqlite.test.ts",
+    "import": "node --experimental-strip-types scripts/import-sqlite.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.8.5",
