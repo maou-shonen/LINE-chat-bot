@@ -1,6 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { SqliteBotRepository, type BotRepository } from "./repository";
 import type { SchemaSnapshot } from "./schema";
+import type { KeywordSelect, KeywordSelectResult } from "./keywords";
+import type { ColdKeywordMeasure, KeywordMeasure, KeywordProfile, KeywordSeed } from "./repository";
 import {
   parseSettingsKey,
   parseSettingsPatch,
@@ -50,5 +52,33 @@ export class BotState extends DurableObject<Env> {
 
   async inspectSchema(): Promise<SchemaSnapshot> {
     return this.repo.inspectSchema();
+  }
+
+  async putKeywords(rows: KeywordSeed[]): Promise<void> {
+    await this.repo.putKeywords(rows);
+  }
+
+  async deleteKeyword(id: string, keyword: string): Promise<void> {
+    await this.repo.deleteKeyword(id, keyword);
+  }
+
+  async anchorLengths(): Promise<number[]> {
+    return this.repo.anchorLengths();
+  }
+
+  async selectKeywordReplies(query: KeywordSelect): Promise<KeywordSelectResult> {
+    return this.repo.selectKeywordReplies(query);
+  }
+
+  async measureKeywordSelect(query: KeywordSelect, rounds: number): Promise<KeywordMeasure> {
+    return this.repo.measureKeywordSelect(query, rounds);
+  }
+
+  async profileKeywordSelect(query: KeywordSelect): Promise<KeywordProfile> {
+    return this.repo.profileKeywordSelect(query);
+  }
+
+  async measureColdRequest(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure> {
+    return this.repo.measureColdRequest(query, rounds);
   }
 }

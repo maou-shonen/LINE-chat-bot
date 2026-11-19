@@ -7,6 +7,7 @@
   },
   "scripts": {
     "typecheck": "wrangler types src/worker-configuration.d.ts && tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json",
+    "bench": "vitest run --config vitest.bench.config.ts",
     "test": "vitest run && node --experimental-strip-types scripts/compare-golden.ts"
   },
   "devDependencies": {
