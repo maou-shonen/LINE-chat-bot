@@ -2,6 +2,7 @@
 
 Not run by the app, the image, or deploy. The operator decides when to run it.
 Default is a count only. Pass --apply to delete.
+執行 --apply 前必須先停 bot。
 
     uv run python scripts/purge_empty_user_settings.py /path/to/line.db
     uv run python scripts/purge_empty_user_settings.py /path/to/line.db --apply
@@ -18,8 +19,10 @@ def main(argv=None):
     parser.add_argument("db")
     parser.add_argument(
         "--apply", action="store_true",
-        help="delete the rows; default is a count only")
+        help="delete the rows; default is a count only. 執行 --apply 前必須先停 bot。")
     args = parser.parse_args(argv)
+    if args.apply:
+        print("執行 --apply 前必須先停 bot。", file=sys.stderr)
     con = sqlite3.connect(args.db)
     try:
         n = con.execute(
