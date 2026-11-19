@@ -15,7 +15,6 @@ from datetime import datetime
 from hashlib import md5
 
 from loguru import logger
-from sqlalchemy import func
 
 from . import services
 from .db import Group, GroupUser, User, UserKeyword, UserSettings
@@ -149,10 +148,9 @@ class EventText:
                 session.add(self.group)
             self.group._json()
 
-        self.group_data = session.query(GroupUser).filter(
-            func.coalesce(GroupUser.gid, "") == (self.group_id or ""),
-            func.coalesce(GroupUser.uid, "") == (self.user_id or ""),
-        ).order_by(GroupUser._id).first() if self.group_id else None
+        self.group_data = GroupUser._lookup(
+            session, self.group_id, self.user_id).order_by(
+            GroupUser._id).first() if self.group_id else None
         if self.group_id:
             if not self.group_data:
                 self.group_data = GroupUser(self.group_id, self.user_id)
@@ -558,10 +556,9 @@ class EventText:
             return score
 
         def _get(user):
-            group_data = self.session.query(GroupUser).filter(
-                func.coalesce(GroupUser.gid, "") == (self.group.id or ""),
-                func.coalesce(GroupUser.uid, "") == (user.id or ""),
-            ).order_by(GroupUser._id).first()
+            group_data = GroupUser._lookup(
+                self.session, self.group.id, user.id).order_by(
+                GroupUser._id).first()
             if group_data is None:
                 group_data = GroupUser(self.group.id, user.id)
                 self.session.add(group_data)
@@ -592,8 +589,7 @@ class EventText:
 
         elif self.key in ["rank", "排名", "排行"]:
             rank = []
-            for row in self.session.query(GroupUser).filter_by(
-                    gid=self.group.id):
+            for row in GroupUser._in_group(self.session, self.group.id):
                 if row.uid is None:
                     continue
                 user = self.session.get(User, row.uid)
@@ -639,8 +635,7 @@ class EventText:
             total = {}.fromkeys(
                 ["人數", "調教", "觸發", "對話", "貼圖", "圖片", "網頁",
                  "髒話", "字數"], 0)
-            for row in self.session.query(GroupUser).filter_by(
-                    gid=self.group.id):
+            for row in GroupUser._in_group(self.session, self.group.id):
                 row._json()
                 total["人數"] += 1
                 for key in score_default.keys():
@@ -661,13 +656,11 @@ class EventText:
 
         elif self.key in ["clean", "clear", "清除"]:
             if is_text_like(self.value, "全部"):
-                self.session.query(GroupUser).filter_by(
-                    gid=self.group.id).delete()
+                GroupUser._in_group(self.session, self.group.id).delete()
                 return "好好好！愛醬就當作大家什麼都沒說過吧！"
             else:
                 users = {}
-                for row in self.session.query(GroupUser).filter_by(
-                        gid=self.group.id):
+                for row in GroupUser._in_group(self.session, self.group.id):
                     if row.uid is None:
                         continue
                     user = self.session.get(User, row.uid)
@@ -686,15 +679,14 @@ class EventText:
                     return "查詢到 %s 人\n請輸入更完整的名稱" % (len(users))
 
                 for uid, user in users.items():
-                    self.session.query(GroupUser).filter_by(
-                        gid=self.group.id, uid=uid).delete()
+                    GroupUser._lookup(
+                        self.session, self.group.id, uid).delete()
                     return f"{user.name}...是誰?"
 
         elif self.key:
             users = {}
             self.key = self.key.strip("@ \n")
-            for row in self.session.query(GroupUser).filter_by(
-                    gid=self.group.id):
+            for row in GroupUser._in_group(self.session, self.group.id):
                 if row.uid is None:
                     continue
                 user = self.session.get(User, row.uid)

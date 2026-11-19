@@ -15,6 +15,7 @@ from sqlalchemy import (
     create_engine,
     event,
     func,
+    literal_column,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -118,6 +119,21 @@ class GroupUser(Base):
     def update(self):
         self._count = json.dumps(self.count)
         self._setting = json.dumps(self.setting)
+
+    @staticmethod
+    def _lookup(session, gid, uid):
+        empty = literal_column("''")
+        return session.query(GroupUser).filter(
+            func.coalesce(GroupUser.gid, empty) == (gid or ""),
+            func.coalesce(GroupUser.uid, empty) == (uid or ""),
+        )
+
+    @staticmethod
+    def _in_group(session, gid):
+        empty = literal_column("''")
+        return session.query(GroupUser).filter(
+            func.coalesce(GroupUser.gid, empty) == (gid or ""),
+        )
 
 
 class KeywordsLogs(Base):
