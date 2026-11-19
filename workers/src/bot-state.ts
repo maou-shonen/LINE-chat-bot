@@ -1,8 +1,9 @@
+import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
 import { SqliteBotRepository, type BotRepository } from "./repository";
 import type { SchemaSnapshot } from "./schema";
 import type { KeywordSelect, KeywordSelectResult } from "./keywords";
-import type { ColdKeywordMeasure, KeywordAudit, KeywordCacheStats, KeywordCompact, KeywordMeasure, KeywordProfile, KeywordSeed, KeywordWriteMeasure, KeywordWriteSample } from "./repository";
+import type { ColdKeywordMeasure, KeywordAudit, KeywordCacheStats, KeywordCompact, KeywordMeasure, KeywordProfile, KeywordSeed, KeywordWriteMeasure, KeywordWriteSample, TouchRows } from "./repository";
 import {
   parseSettingsKey,
   parseSettingsPatch,
@@ -101,5 +102,13 @@ export class BotState extends DurableObject<Env> {
   async alarm(): Promise<void> {
     const step = await this.repo.compactKeywordCache();
     if (!step.done) await this.ctx.storage.setAlarm(Date.now() + 10);
+  }
+
+  async recordMessage(input: unknown, now: unknown): Promise<void> {
+    await applyCountMessage(this.repo, input, now);
+  }
+
+  async inspectTouch(): Promise<TouchRows> {
+    return this.repo.inspectTouch();
   }
 }

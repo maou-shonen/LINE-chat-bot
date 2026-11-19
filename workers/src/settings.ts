@@ -29,7 +29,8 @@ export function parseSettingsPatch(value: unknown): SettingsPatch {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("settings patch must be a flat object");
   }
-  const patch: SettingsPatch = {};
+  // null prototype keeps "__proto__" as a key, matching Python json. defineProperty copies it onto a normal object so the DO stub can clone the result.
+  const patch = Object.create(null) as SettingsPatch;
   for (const [key, entry] of Object.entries(value)) {
     if (!isJsonPrimitive(entry)) {
       throw new TypeError(
@@ -38,7 +39,20 @@ export function parseSettingsPatch(value: unknown): SettingsPatch {
     }
     patch[key] = entry;
   }
-  return patch;
+  return copyOwn(patch);
+}
+
+function copyOwn(source: SettingsPatch): SettingsPatch {
+  const out: SettingsPatch = {};
+  for (const key of Object.getOwnPropertyNames(source)) {
+    Object.defineProperty(out, key, {
+      value: source[key],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
 }
 
 function isJsonPrimitive(value: unknown): value is JsonPrimitive {
