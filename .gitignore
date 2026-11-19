@@ -9,3 +9,7 @@ tests/golden/.run
 *.tmp
 
 config.yaml
+node_modules
+.wrangler
+worker-configuration.d.ts
+.audit
