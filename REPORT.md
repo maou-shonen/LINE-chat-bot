@@ -3,8 +3,8 @@
 目標是只寫 staging 部署草稿與驗收清單，不部署。
 
 - 分支：`docs/workers-staging`
-- Commit：`7bf725164a8738c6d632f405552371b9cdde32ef`
-- 遠端：尚未 push（這份檔案進第二個 commit 後才 push）
+- 設定與文件：`7bf725164a8738c6d632f405552371b9cdde32ef`
+- 本報告：隨後的 commit。Push 目標是 `git@github.com:maou-shonen/LINE-chat-bot.git` 的 `docs/workers-staging`。沒有改 remote。
 
 ## 驗證
 
