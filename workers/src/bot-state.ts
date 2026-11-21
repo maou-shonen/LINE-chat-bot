@@ -1,3 +1,4 @@
+import { BlobPutError, parseBlobPut } from "./blob-store";
 import { handleCallback, type DispatchEnv } from "./dispatch";
 import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
@@ -71,6 +72,9 @@ export class BotState extends DurableObject<Env> {
     if (request.method === "POST" && url.pathname === "/import") {
       return this.importRequest(request);
     }
+    if (request.method === "POST" && url.pathname === "/import/kv") {
+      return this.importKv(request);
+    }
     if (request.method === "POST" && url.pathname.startsWith("/callback/")) {
       await handleCallback(this.repo, request, this.env as unknown as DispatchEnv);
       return new Response("ok");
@@ -103,6 +107,36 @@ export class BotState extends DurableObject<Env> {
     } catch (error) {
       if (error instanceof TypeError) throw error;
       return new Response("batch rejected", { status: 409 });
+    }
+  }
+
+  private async importKv(request: Request): Promise<Response> {
+    const presented = request.headers.get(IMPORT_SECRET_HEADER);
+    const gate = importGate(this.env.IMPORT_SECRET, presented);
+    if (gate === "disabled") return new Response("not found", { status: 404 });
+    if (gate === "reject") return new Response("unauthorized", { status: 401 });
+    let payload: unknown;
+    try {
+      payload = await request.json();
+    } catch {
+      return new Response("invalid blob", { status: 400 });
+    }
+    try {
+      const put = parseBlobPut(payload);
+      if (put.bytes !== undefined) {
+        const bytes = put.bytes.buffer.slice(
+          put.bytes.byteOffset,
+          put.bytes.byteOffset + put.bytes.byteLength,
+        );
+        await this.ctx.storage.put(put.key, bytes);
+        return Response.json({ ok: true, bytes: put.bytes.byteLength });
+      }
+      await this.ctx.storage.put(put.key, put.json);
+      const bytes = new TextEncoder().encode(JSON.stringify(put.json)).byteLength;
+      return Response.json({ ok: true, bytes });
+    } catch (error) {
+      if (error instanceof BlobPutError) return new Response("invalid blob", { status: 400 });
+      throw error;
     }
   }
 
