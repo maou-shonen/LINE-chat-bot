@@ -85,9 +85,31 @@ const OPINION: Record<string, true> = {
 
 const IMAGE_TYPES: Record<string, true> = { "image/jpeg": true, "image/png": true };
 
+// Runtime settings from Worker secrets. Fixture headers are honored only when FIXTURE_HEADERS is "1"
+// (tests); production uses the real clock, Math.random, Safe Browsing and imgur.
+export interface DispatchEnv {
+  FIXTURE_HEADERS?: string;
+  GOOGLE_SAFE_BROWSING_KEY?: string;
+  IMGUR_CLIENT_ID?: string;
+  DEVELOPER_USER_ID?: string;
+  DEVELOPER_BOT_TOKEN?: string;
+}
+
+type Clock = {
+  token: string;
+  epoch: number;
+  now: string;
+  rng: RngOp[];
+  safe: string;
+  fetch: typeof fetch;
+  live: boolean;
+  env: DispatchEnv;
+};
+
 export async function handleCallback(
   repo: BotRepository,
   request: Request,
+  env: DispatchEnv = { FIXTURE_HEADERS: "1" },
 ): Promise<void> {
   const route = new URL(request.url).pathname.match(/^\/callback\/([^/]+)\/(.+)$/);
   const token = route?.[2] === undefined ? "" : safeDecode(route[2]);
@@ -100,10 +122,12 @@ export async function handleCallback(
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return;
   const events = (payload as { events?: unknown }).events;
   if (!Array.isArray(events)) return;
-  const epoch = headerNumber(request, "x-frozen-epoch") ?? Date.now() / 1000;
-  const now = request.headers.get("x-frozen-now") ?? "2023-11-14 22:13:20";
-  const rng = parseRng(request.headers.get("x-fixture-rng"));
-  const safe = request.headers.get("x-fixture-safe-browsing") ?? "clean";
+  const fixture = env.FIXTURE_HEADERS === "1";
+  const nowMs = Date.now();
+  const epoch = (fixture ? headerNumber(request, "x-frozen-epoch") : null) ?? nowMs / 1000;
+  const now = fixture ? request.headers.get("x-frozen-now") ?? "2023-11-14 22:13:20" : taipeiNow(nowMs);
+  const rng = fixture ? parseRng(request.headers.get("x-fixture-rng")) : [];
+  const safe = fixture ? request.headers.get("x-fixture-safe-browsing") ?? "clean" : "live";
   for (const event of events) {
     if (event === null || typeof event !== "object" || Array.isArray(event)) continue;
     await handleEvent(repo, event as Record<string, unknown>, {
@@ -113,6 +137,8 @@ export async function handleCallback(
       rng,
       safe,
       fetch: fetch.bind(globalThis),
+      live: !fixture,
+      env,
     });
   }
 }
@@ -120,14 +146,7 @@ export async function handleCallback(
 async function handleEvent(
   repo: BotRepository,
   event: Record<string, unknown>,
-  clock: {
-    token: string;
-    epoch: number;
-    now: string;
-    rng: RngOp[];
-    safe: string;
-    fetch: typeof fetch;
-  },
+  clock: Clock,
 ): Promise<void> {
   const type = event.type;
   const source = sourceIds(event.source);
@@ -154,7 +173,13 @@ async function handleEvent(
   if (kind === "image") {
     await applyCountMessage(repo, { kind: "image", source }, clock.now);
     if (source.groupId === null && source.userId !== null && typeof record.id === "string") {
-      const link = await uploadImage(clock.fetch, record.id, clock.token);
+      let link: string;
+      try {
+        link = await uploadImage(clock.fetch, record.id, clock.token, clock.env.IMGUR_CLIENT_ID ?? "");
+      } catch (error) {
+        // Python replies str(e) when the upload fails.
+        link = error instanceof Error ? error.message : String(error);
+      }
       await send(clock, source.userId, replyToken, [link], false);
     }
     await refreshName(repo, source, clock);
@@ -175,7 +200,7 @@ async function decide(
   repo: BotRepository,
   text: string,
   source: { userId: string | null; groupId: string | null },
-  clock: { epoch: number; now: string; rng: RngOp[]; safe: string; fetch: typeof fetch; token: string },
+  clock: Clock,
 ): Promise<readonly string[] | null> {
   const normalized = text.replaceAll('"', "\uFF02").replaceAll("'", "\u2019").replaceAll(";", "\uFF1B");
   const parsed = parseOrder(normalized);
@@ -214,7 +239,9 @@ async function decide(
   });
   if (keywords.kind === "reply") return keywords.messages;
   if (OPINION[parsed.order] === true) {
-    return [parsed.key === null ? OPINION_HELP : "回報功能尚未設定，著急的話請直接聯絡開發者"];
+    if (parsed.key === null) return [OPINION_HELP];
+    if (await pushDeveloper(clock, source, normalized)) return [OPINION_DONE];
+    return ["回報功能尚未設定，著急的話請直接聯絡開發者"];
   }
   return mainReply(repo, normalized, source, clock);
 }
@@ -223,14 +250,18 @@ async function mainReply(
   repo: BotRepository,
   text: string,
   source: { userId: string | null; groupId: string | null },
-  clock: { epoch: number; now: string; rng: RngOp[]; safe: string; fetch: typeof fetch },
+  clock: Clock,
 ): Promise<readonly string[] | null> {
   if (text.includes("http:") || text.includes("https:")) {
-    if (source.groupId !== null) return safeBrowsing(clock.fetch, text, clock.safe);
+    if (source.groupId !== null) {
+      return clock.live
+        ? safeBrowsingLive(clock.fetch, text, clock.env.GOOGLE_SAFE_BROWSING_KEY ?? "")
+        : safeBrowsing(clock.fetch, text, clock.safe);
+    }
   }
   let message = stripEnds(text.toLowerCase());
   if (message === "") return null;
-  const script = playRng(clock.rng);
+  const script = clock.live ? liveRng() : playRng(clock.rng);
   const rng: Rng = script;
   if (source.groupId !== null && message !== NAME && message.startsWith(NAME)) {
     const stripped = stripEnds(message.slice(NAME.length));
@@ -343,7 +374,7 @@ async function probe(
     reply: winner,
     message: normalized,
     userId: userId ?? "",
-    now: new Date(`${clock.now.replace(" ", "T")}Z`),
+    now: new Date(`${clock.now.slice(0, 19).replace(" ", "T")}Z`),
     rng,
     randomOrg,
   });
@@ -430,7 +461,12 @@ async function imageReady(doFetch: typeof fetch, messages: readonly string[]): P
   return ready;
 }
 
-async function uploadImage(doFetch: typeof fetch, messageId: string, token: string): Promise<string> {
+async function uploadImage(
+  doFetch: typeof fetch,
+  messageId: string,
+  token: string,
+  clientId: string,
+): Promise<string> {
   const content = await doFetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
     headers: { authorization: `Bearer ${token}` },
   });
@@ -439,12 +475,112 @@ async function uploadImage(doFetch: typeof fetch, messageId: string, token: stri
   body.set("image", new File([bytes], `line-${messageId}`));
   const uploaded = await doFetch("https://api.imgur.com/3/image", {
     method: "POST",
-    headers: { authorization: "Client-ID " },
+    headers: { authorization: `Client-ID ${clientId}` },
     body,
   });
   const json = (await uploaded.json()) as { data?: { link?: unknown } };
   if (typeof json.data?.link !== "string") throw new Error("imgur");
   return json.data.link;
+}
+
+const THREAT_NAME: Record<string, string> = {
+  MALWARE: "惡意軟件",
+  SOCIAL_ENGINEERING: "社交工程攻擊",
+  UNWANTED_SOFTWARE: "不受歡迎軟體",
+  POTENTIALLY_HARMFUL_APPLICATION: "淺在危險軟體",
+  THREAT_TYPE_UNSPECIFIED: "未知類型",
+};
+
+const OPINION_DONE = "訊息已經傳送啦\n回覆內容將在開發者回覆後任何一個有愛醬的地方於你說話後彈出\n";
+
+// Python services.google_safe_browsing. An empty key still calls Google and answers 查詢失敗, like Python.
+export async function safeBrowsingLive(
+  doFetch: typeof fetch,
+  message: string,
+  key: string,
+): Promise<string[] | null> {
+  const urls = message.match(/https?:\/\/(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*(),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+/g) ?? [];
+  const response = await doFetch(
+    `https://safebrowsing.googleapis.com/v4/threatMatches:find?key=${encodeURIComponent(key)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client: { clientId: "mao line bot", clientVersion: "1.0" },
+        threatInfo: {
+          threatTypes: Object.keys(THREAT_NAME),
+          platformTypes: ["ANY_PLATFORM"],
+          threatEntryTypes: ["URL"],
+          threatEntries: urls.map((url) => ({ url })),
+        },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  if (response.status !== 200) return ["Google網址檢查：查詢失敗"];
+  const json = (await response.json()) as Record<string, unknown>;
+  if (json === null || Object.keys(json).length === 0) return null;
+  const out = ["Google網址檢查：危險！\n"];
+  try {
+    for (const match of json.matches as { threat: { url: string }; threatType: string }[]) {
+      out.push(`網址:${match.threat.url}\n類型:${THREAT_NAME[match.threatType] ?? match.threatType}\n`);
+    }
+  } catch (error) {
+    out.push(`<報告產生失敗>\n${error instanceof Error ? error.message : String(error)}`);
+  }
+  return out;
+}
+
+// Python push_developer for 回報. Python sends the channel token as the first line; this sends a
+// short SHA-256 prefix instead so the token never lands in a chat.
+async function pushDeveloper(
+  clock: Clock,
+  source: { userId: string | null; groupId: string | null },
+  message: string,
+): Promise<boolean> {
+  const to = clock.env.DEVELOPER_USER_ID ?? "";
+  const token = clock.env.DEVELOPER_BOT_TOKEN ?? "";
+  if (!clock.live || to === "" || token === "") return false;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(clock.token)));
+  const bot = [...digest.slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const client = createLineClient({ token, fetch: clock.fetch });
+  await client.push({
+    to,
+    messages: client.format({
+      messages: [`${bot}\n${source.groupId ?? "None"}\n${source.userId ?? "None"}\n${message}`],
+      format: true,
+    }),
+  });
+  return true;
+}
+
+// Python datetime.now() in the NAS container (TZ=Asia/Taipei), str() form with microseconds.
+export function taipeiNow(ms: number): string {
+  const iso = new Date(ms + 8 * 3_600_000).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 23)}000`;
+}
+
+// Python random module semantics on Math.random.
+export function liveRng(): ReturnType<typeof playRng> {
+  return {
+    uniform(low: number, high: number) {
+      return low + (high - low) * Math.random();
+    },
+    choice<T>(items: readonly T[]): T {
+      if (items.length === 0) throw new RangeError("Cannot choose from an empty sequence");
+      return items[Math.floor(Math.random() * items.length)] as T;
+    },
+    sample<T>(items: readonly T[], k: number): readonly T[] {
+      if (k < 0 || k > items.length) throw new RangeError("Sample larger than population or is negative");
+      const pool = [...items];
+      for (let i = 0; i < k; i += 1) {
+        const j = i + Math.floor(Math.random() * (pool.length - i));
+        [pool[i], pool[j]] = [pool[j] as T, pool[i] as T];
+      }
+      return pool.slice(0, k);
+    },
+    finish() {},
+  };
 }
 
 async function safeBrowsing(doFetch: typeof fetch, message: string, mode: string): Promise<string[] | null> {
