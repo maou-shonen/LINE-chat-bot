@@ -15,13 +15,14 @@ export const DEFAULT_BATCH_SIZE = 200;
 export const MAX_BATCH_ROWS = 1000;
 export const BATCH_BOOKKEEPING_WRITES = 2;
 
+// Reply-affecting tables first so the probe runs on real keywords early; keywords_logs is history only.
 export const IMPORT_TABLE_ORDER = [
-  "user",
-  "group",
-  "group_user",
-  "keywords_logs",
   "user_keyword",
   "user_settings",
+  "group",
+  "group_user",
+  "user",
+  "keywords_logs",
 ] as const;
 
 export type ImportTable = (typeof IMPORT_TABLE_ORDER)[number];

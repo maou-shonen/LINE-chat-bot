@@ -157,7 +157,7 @@ describe("sqlite import", () => {
     });
     const text = lines.join("\n");
     assert.equal(status, "done");
-    assert.match(text, /index_count user=1 group=1 group_user=1 keywords_logs=1 user_keyword=3 user_settings=1/);
+    assert.match(text, /index_count user_keyword=3 user_settings=1 group=1 group_user=1 user=1 keywords_logs=1/);
     assert.match(text, /user source=2 import=2 skipped=0 write_units=4/);
     assert.match(text, /group source=1 import=1 skipped=0 write_units=2/);
     assert.match(text, /group_user source=2 import=2 skipped=0 write_units=4/);
