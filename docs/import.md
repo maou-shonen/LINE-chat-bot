@@ -52,3 +52,17 @@ IMPORT_SECRET='(staging secret)' npm run import -- \
 中斷或到達當日上限時，checkpoint 停在最後一批成功的位置。連線失敗、4xx 或 5xx 都不會前進。隔天 00:00 UTC 之後用同一個指令再跑。SQLite 檔的列數若和 checkpoint 不一致，工具會停下來，不續跑。
 
 checkpoint 只記路徑、列數和位移。它不記 secret，也不記訊息內容。
+
+## 正式匯入（2026-11-21 起）
+
+正式匯入的對象是 `line-chat-bot`，不是 staging。DO 綁定在各自的 script 上，所以要匯進最後接 webhook 的那個 Worker。
+
+- 機器：shonen-lab。所有檔案放在 `~/linebot-import/`（權限 700）。
+- 快照：`line-snapshot-20261121.db`，唯讀。checkpoint 會比對列數，所以整個匯入期間都用這一份。
+- 程式：固定在 worktree `~/projects/LINE-chat-bot/.worktree/import`（ff79de6），不跟著分支移動。
+- 每日指令：`~/linebot-import/run-import.sh`。用 flock 避免重複執行，log 寫在 `~/linebot-import/logs/import-YYYYMMDD.log`（只有列數）。
+- 排程：每天 00:10 UTC（台北 08:10）以後跑一次。跑到當日上限會自己停，隔天用同一個指令續跑，重跑也安全。
+- 上限：匯入 `user_keyword` 那幾天是 64,000，之後 80,000。關鍵字列會額外寫 probe cache，第 1 天實測 80,000 units 對應 100,532 rows，超過免費額度。
+- 匯入順序：`user_keyword`、`user_settings`、`group`、`group_user`、`user`、`keywords_logs`。
+
+快照之後的差異回填和切換步驟，見 [cutover.md](cutover.md)。
