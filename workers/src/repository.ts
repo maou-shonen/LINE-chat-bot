@@ -81,6 +81,7 @@ export interface BotRepository {
   keywordRows(query: KeywordSelect): Promise<KeywordRow[]>;
   measureKeywordRender(query: KeywordSelect, rounds: number): Promise<KeywordMeasure>;
   measureColdRender(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure>;
+  userName(id: string): Promise<string | null>;
   setUserName(id: string, name: string): Promise<void>;
   readGroupWeights(groupId: string): Promise<CountMap>;
   writeGroupWeight(groupId: string, key: string, value: number): Promise<void>;
@@ -808,7 +809,14 @@ export class SqliteBotRepository implements BotRepository {
     return readKeywords(this.storage.sql);
   }
 
+  async userName(id: string): Promise<string | null> {
+    const row = this.storage.sql.exec("SELECT name FROM user WHERE id = ?", id).toArray()[0];
+    if (row === undefined) return null;
+    return optionalText(asRecord(row), "name");
+  }
+
   async setUserName(id: string, name: string): Promise<void> {
+    if ((await this.userName(id)) === name) return;
     this.storage.sql.exec("UPDATE user SET name = ? WHERE id = ?", name, id);
   }
 
