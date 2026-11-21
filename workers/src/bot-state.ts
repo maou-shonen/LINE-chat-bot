@@ -1,4 +1,4 @@
-import { BlobPutError, parseBlobPut } from "./blob-store";
+import { BlobPutError, COLD_BOT_STATE, parseBlobPut } from "./blob-store";
 import { handleCallback, type DispatchEnv } from "./dispatch";
 import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
@@ -22,6 +22,7 @@ import {
   type KeywordWrite,
   type KeywordWriteStatus,
   type FixtureSlices,
+  type GroupUserRow,
   type TouchRows,
   type ColdKeywordMeasure,
   type KeywordAudit,
@@ -61,7 +62,7 @@ export class BotState extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.repo = new SqliteBotRepository(ctx.storage);
+    this.repo = new SqliteBotRepository(ctx.storage, ctx.id.name === COLD_BOT_STATE);
     ctx.blockConcurrencyWhile(async () => {
       await this.repo.migrate();
     });
@@ -229,9 +230,14 @@ export class BotState extends DurableObject<Env> {
     return this.repo.measureKeywordWrite(sample);
   }
 
+  async pumpHydration(): Promise<boolean> {
+    return this.repo.pumpHydration();
+  }
+
   async alarm(): Promise<void> {
+    const moreCold = await this.repo.pumpHydration();
     const step = await this.repo.compactKeywordCache();
-    if (!step.done) await this.ctx.storage.setAlarm(Date.now() + 10);
+    if (moreCold || !step.done) await this.ctx.storage.setAlarm(Date.now() + 10);
   }
 
   async recordMessage(input: unknown, now: unknown): Promise<void> {
@@ -240,6 +246,18 @@ export class BotState extends DurableObject<Env> {
 
   async inspectTouch(): Promise<TouchRows> {
     return this.repo.inspectTouch();
+  }
+
+  async listGroupUsers(groupId: string): Promise<GroupUserRow[]> {
+    return this.repo.listGroupUsers(groupId);
+  }
+
+  async deleteGroupUsers(groupId: string, userId: string | null): Promise<void> {
+    await this.repo.deleteGroupUsers(groupId, userId);
+  }
+
+  async userName(id: string): Promise<string | null> {
+    return this.repo.userName(id);
   }
 
   async upsertKeyword(input: KeywordWrite): Promise<KeywordWriteStatus> {
