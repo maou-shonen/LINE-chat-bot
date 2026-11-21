@@ -25,6 +25,7 @@ export interface GroupBlobUser {
 }
 
 export interface GroupBlob {
+  id: string;
   group: {
     id: string;
     _id: string | null;
@@ -33,7 +34,7 @@ export interface GroupBlob {
     _admin: string;
     create_on: string | null;
     update_on: string | null;
-  };
+  } | null;
   users: GroupBlobUser[];
   settings: Array<{ user_id: string; options: string }>;
 }

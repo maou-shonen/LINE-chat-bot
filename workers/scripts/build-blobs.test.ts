@@ -42,6 +42,17 @@ describe("build blobs", () => {
       "{}",
       "{}",
     );
+    db.prepare("INSERT INTO group_user (gid, uid, _count, _setting) VALUES (?, ?, ?, ?)").run(
+      "Gorphan",
+      "Usecret",
+      "{}",
+      "{}",
+    );
+    db.prepare("INSERT INTO user_settings (group_id, user_id, options) VALUES (?, ?, ?)").run(
+      "Gorphan",
+      "Usecret",
+      '{"b":1}',
+    );
     db.prepare("INSERT INTO user_keyword (id, author, keyword, reply, anchor) VALUES (?, ?, ?, ?, ?)").run(
       "Gsecret",
       null,
@@ -79,7 +90,9 @@ describe("build blobs", () => {
       stdout: (line) => lines.push(line),
     });
     assert.equal(statSync(sqlite).mtimeMs, before);
-    assert.equal(summary.groups, 1);
+    assert.equal(summary.groups, 2);
+    assert.equal(summary.groupsMissing, 1);
+    assert.equal(summary.membersSkipped, 0);
     assert.equal(summary.users, 1);
     assert.equal(summary.keywords, 1);
     assert.equal(summary.settingsDm, 1);
@@ -95,7 +108,21 @@ describe("build blobs", () => {
     assert.ok(names.includes("c-manifest.json"));
     const groupFile = names.find((name) => name.startsWith("c-group:"));
     assert.ok(groupFile);
-    const group = JSON.parse(readFileSync(join(out, groupFile), "utf8")) as { users: Array<{ name: string }> };
+    const orphanName = names.find((name) => name.startsWith("c-group:Gorphan"));
+    assert.ok(orphanName);
+    const orphan = JSON.parse(readFileSync(join(out, orphanName), "utf8")) as {
+      group: null;
+      users: Array<{ uid: string }>;
+      settings: Array<{ options: string }>;
+    };
+    assert.equal(orphan.group, null);
+    assert.equal(orphan.users.length, 1);
+    assert.equal(orphan.settings.length, 1);
+    const presentName = names.find((name) => name.startsWith("c-group:Gsecret"));
+    assert.ok(presentName);
+    const group = JSON.parse(readFileSync(join(out, presentName), "utf8")) as {
+      users: Array<{ name: string }>;
+    };
     assert.equal(group.users[0]?.name, "Nsecret");
     await assert.rejects(() =>
       buildBlobs({

@@ -29,6 +29,7 @@ export interface BuildBlobOptions {
 
 export interface BlobSummary {
   groups: number;
+  groupsMissing: number;
   groupBytes: number;
   users: number;
   userShards: number;
@@ -67,6 +68,7 @@ export async function buildBlobs(options: BuildBlobOptions): Promise<BlobSummary
       resolve(outDir, "c-manifest.json"),
       `${JSON.stringify({
         groups: summary.groups,
+        groupsMissing: summary.groupsMissing,
         users: summary.users,
         userShards: summary.userShards,
         keywordKeys: summary.keywordKeys,
@@ -122,6 +124,7 @@ function collect(db: DatabaseSync): { puts: BlobPut[]; summary: BlobSummary } {
     const id = text(row, "id");
     if (id === null) continue;
     groups.set(id, {
+      id,
       group: {
         id,
         _id: text(row, "_id"),
@@ -139,12 +142,13 @@ function collect(db: DatabaseSync): { puts: BlobPut[]; summary: BlobSummary } {
   let membersSkipped = 0;
   for (const row of db.prepare("SELECT gid, uid, _count, _setting FROM group_user").all()) {
     const gid = text(row, "gid");
-    const uid = text(row, "uid");
-    const group = gid === null ? undefined : groups.get(gid);
-    if (group === undefined || uid === null) {
+    if (gid === null) {
       membersSkipped += 1;
       continue;
     }
+    const group = groups.get(gid) ?? emptyGroup(gid);
+    groups.set(gid, group);
+    const uid = text(row, "uid") ?? "";
     group.users.push({
       uid,
       name: names.get(uid) ?? null,
@@ -171,11 +175,8 @@ function collect(db: DatabaseSync): { puts: BlobPut[]; summary: BlobSummary } {
       settingsDm += 1;
       continue;
     }
-    const group = groups.get(groupId);
-    if (group === undefined) {
-      settingsSkipped += 1;
-      continue;
-    }
+    const group = groups.get(groupId) ?? emptyGroup(groupId);
+    groups.set(groupId, group);
     group.settings.push({ user_id: userId, options });
     settingsGroup += 1;
   }
@@ -205,8 +206,10 @@ function collect(db: DatabaseSync): { puts: BlobPut[]; summary: BlobSummary } {
 
   const puts: BlobPut[] = [...keywordPuts];
   let groupBytes = 0;
+  let groupsMissing = 0;
   for (const group of groups.values()) {
-    const key = groupBlobKey(group.group.id);
+    if (group.group === null) groupsMissing += 1;
+    const key = groupBlobKey(group.id);
     groupBytes += new TextEncoder().encode(JSON.stringify(group)).byteLength;
     puts.push({ key, json: group });
   }
@@ -239,6 +242,7 @@ function collect(db: DatabaseSync): { puts: BlobPut[]; summary: BlobSummary } {
     puts,
     summary: {
       groups: groups.size,
+      groupsMissing,
       groupBytes,
       users: userCount,
       userShards: users.size,
@@ -258,6 +262,10 @@ function collect(db: DatabaseSync): { puts: BlobPut[]; summary: BlobSummary } {
   };
 }
 
+function emptyGroup(id: string): GroupBlob {
+  return { id, group: null, users: [], settings: [] };
+}
+
 function writePut(outDir: string, put: BlobPut): void {
   const safe = put.key.replaceAll("/", "_");
   if (put.bytes !== undefined) {
@@ -270,6 +278,7 @@ function writePut(outDir: string, put: BlobPut): void {
 function formatSummary(summary: BlobSummary): string {
   return [
     `groups=${summary.groups}`,
+    `groups_missing=${summary.groupsMissing}`,
     `group_bytes=${summary.groupBytes}`,
     `users=${summary.users}`,
     `user_shards=${summary.userShards}`,
