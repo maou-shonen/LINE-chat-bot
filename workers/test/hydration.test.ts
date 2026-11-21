@@ -84,6 +84,57 @@ describe("cold hydration", () => {
     expect(dm.stored).toBe(true);
   });
 
+  it("fills shard timestamps after a group stub, and does not reread the shard", async () => {
+    const id = "Ustub";
+    await putGroup(stub, {
+      id: "Gstub",
+      group: {
+        id: "Gstub",
+        _id: "g",
+        _count: "{}",
+        _setting: "{}",
+        _admin: "{}",
+        create_on: "2019-01-01",
+        update_on: "2019-01-01",
+      },
+      users: [
+        { uid: id, name: "FromGroup", _count: "{}", _setting: "{}" },
+        { uid: "Uspeaker", name: "Other", _count: "{}", _setting: "{}" },
+      ],
+      settings: [],
+    });
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put(userShardKey(userShardIndex(id)), {
+        users: [{ id, name: "FromShard", create_on: "2017-05-01", update_on: "2017-06-01" }],
+        settings: [{ user_id: id, options: '{"dm": 1}' }],
+      });
+    });
+    await stub.recordMessage(text("Gstub", "Uspeaker", "hi"), NOW);
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec("UPDATE user SET name = ? WHERE id = ?", "Live", id);
+    });
+    await installMeter(stub);
+    await spyGets(stub);
+    await stub.recordMessage(text("Gstub", id, "hi"), "2024-03-01 00:00:00");
+    const user = await runInDurableObject(stub, (_instance, state) => {
+      const row = state.storage.sql.exec(
+        "SELECT name, create_on, update_on FROM user WHERE id = ?",
+        id,
+      ).one();
+      return { name: String(row.name), create_on: String(row.create_on), update_on: String(row.update_on) };
+    });
+    expect(user.name).toBe("Live");
+    expect(user.create_on).toBe("2017-05-01");
+    expect(user.update_on).toBe("2024-03-01 00:00:00");
+    const dm = await stub.getSettings({ groupId: "", userId: id });
+    expect(dm.stored).toBe(true);
+    const filled = await readMeter(stub);
+    const gets = await readGets(stub);
+    await stub.userName(id);
+    expect(await readGets(stub)).toBe(gets);
+    console.log(JSON.stringify({ stubThenShardRowsRead: filled.rowsRead, stubThenShardRowsWritten: filled.rowsWritten }));
+  });
+
   it("lists a 659 member group during batched hydration, then finishes idempotently", async () => {
     const users = [];
     for (let i = 0; i < 659; i += 1) {

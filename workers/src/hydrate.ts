@@ -20,7 +20,7 @@ export class Hydrator {
 
   async beforeUser(id: string): Promise<void> {
     if (!this.enabled || this.users.has(id)) return;
-    if (this.userExists(id) || this.checkedUser(id)) {
+    if (this.checkedUser(id)) {
       this.users.add(id);
       return;
     }
@@ -29,7 +29,10 @@ export class Hydrator {
     this.storage.transactionSync(() => {
       if (row !== null) {
         this.storage.sql.exec(
-          "INSERT INTO user (id, name, create_on, update_on) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+          `INSERT INTO user (id, name, create_on, update_on) VALUES (?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             create_on = COALESCE(user.create_on, excluded.create_on),
+             update_on = COALESCE(user.update_on, excluded.update_on)`,
           row.id,
           row.name,
           row.create_on,
@@ -215,12 +218,7 @@ export class Hydrator {
         member._count,
         member._setting,
       );
-      this.users.add(member.uid);
     }
-  }
-
-  private userExists(id: string): boolean {
-    return this.storage.sql.exec("SELECT id FROM user WHERE id = ?", id).toArray()[0] !== undefined;
   }
 
   private checkedUser(id: string): boolean {
