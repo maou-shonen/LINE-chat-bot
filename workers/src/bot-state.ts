@@ -1,4 +1,4 @@
-import { handleCallback } from "./dispatch";
+import { handleCallback, type DispatchEnv } from "./dispatch";
 import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
 import {
@@ -72,7 +72,7 @@ export class BotState extends DurableObject<Env> {
       return this.importRequest(request);
     }
     if (request.method === "POST" && url.pathname.startsWith("/callback/")) {
-      await handleCallback(this.repo, request);
+      await handleCallback(this.repo, request, this.env as unknown as DispatchEnv);
       return new Response("ok");
     }
     if (request.method !== "POST") {

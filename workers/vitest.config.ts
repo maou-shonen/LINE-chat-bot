@@ -8,6 +8,7 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
+      miniflare: { bindings: { FIXTURE_HEADERS: "1" } },
     }),
   ],
 });
