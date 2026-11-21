@@ -12,6 +12,7 @@ import {
   type CountSource,
 } from "./counts";
 import { ahoHits, buildAho, decodeAho, encodeAho, startAhoBuild, stepAhoBuild, type AhoBuild, type AhoMachine } from "./aho";
+import { Hydrator } from "./hydrate";
 import { applyImportBatch } from "./import-apply";
 import { type ApplyResult, type ImportBatch } from "./import-plan";
 import { renderReply } from "./gacha";
@@ -88,10 +89,15 @@ export interface BotRepository {
   listGroupUsers(groupId: string): Promise<GroupUserRow[]>;
   deleteGroupUsers(groupId: string, userId: string | null): Promise<void>;
   fixtureSlices(): Promise<FixtureSlices>;
+  pumpHydration(): Promise<boolean>;
 }
 
 export class SqliteBotRepository implements BotRepository {
-  constructor(private readonly storage: DurableObjectStorage) {}
+  private readonly cold: Hydrator;
+
+  constructor(private readonly storage: DurableObjectStorage, hydrate = false) {
+    this.cold = new Hydrator(storage, hydrate);
+  }
 
   private probeCache: ProbeCache | null = null;
   private cacheStats: KeywordCacheStats = {
@@ -107,6 +113,7 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async getSettings(key: SettingsKey): Promise<SettingsView> {
+    await this.cold.beforeSettings(key);
     const current = readOptions(this.storage.sql, key);
     if (current === null) {
       return { groupId: key.groupId, userId: key.userId, options: {}, stored: false };
@@ -120,6 +127,7 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async upsertSettings(key: SettingsKey, patch: SettingsPatch): Promise<void> {
+    await this.cold.beforeSettings(key);
     this.storage.transactionSync(() => {
       const current = readOptions(this.storage.sql, key);
       const next = { ...(current?.options ?? {}), ...patch };
@@ -128,6 +136,7 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async omitSettings(key: SettingsKey, names: readonly string[]): Promise<void> {
+    await this.cold.beforeSettings(key);
     this.storage.transactionSync(() => {
       const current = readOptions(this.storage.sql, key);
       if (current === null) return;
@@ -138,6 +147,7 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async countSettings(key: SettingsKey): Promise<number> {
+    await this.cold.beforeSettings(key);
     const row = this.storage.sql
       .exec(
         "SELECT COUNT(*) AS n FROM user_settings WHERE group_id = ? AND user_id = ?",
@@ -156,9 +166,14 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async touchAndCount(input: TouchAndCount): Promise<void> {
+    await this.cold.beforeTouch(input.source.groupId, input.source.userId);
     this.storage.transactionSync(() => {
       writeTouch(this.storage.sql, input);
     });
+  }
+
+  async pumpHydration(): Promise<boolean> {
+    return this.cold.pump();
   }
 
   async inspectTouch(): Promise<TouchRows> {
@@ -810,17 +825,20 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async userName(id: string): Promise<string | null> {
+    await this.cold.beforeUser(id);
     const row = this.storage.sql.exec("SELECT name FROM user WHERE id = ?", id).toArray()[0];
     if (row === undefined) return null;
     return optionalText(asRecord(row), "name");
   }
 
   async setUserName(id: string, name: string): Promise<void> {
+    await this.cold.beforeUser(id);
     if ((await this.userName(id)) === name) return;
     this.storage.sql.exec("UPDATE user SET name = ? WHERE id = ?", name, id);
   }
 
   async readGroupWeights(groupId: string): Promise<CountMap> {
+    await this.cold.beforeGroup(groupId);
     const row = this.storage.sql.exec(`SELECT _count FROM "group" WHERE id = ?`, groupId).toArray()[0];
     if (row === undefined) return {};
     const raw = asRecord(row)._count;
@@ -829,6 +847,7 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async writeGroupWeight(groupId: string, key: string, value: number): Promise<void> {
+    await this.cold.beforeGroup(groupId);
     this.storage.transactionSync(() => {
       const current = this.storage.sql.exec(`SELECT _count FROM "group" WHERE id = ?`, groupId).toArray()[0];
       if (current === undefined) return;
@@ -839,7 +858,9 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async listGroupUsers(groupId: string): Promise<GroupUserRow[]> {
-    return this.storage.sql
+    const pending = await this.cold.pendingBlob(groupId);
+    const omit = this.cold.omitted(groupId);
+    const stored = this.storage.sql
       .exec(
         `SELECT gu.uid AS uid, gu._count AS _count, u.name AS name
          FROM group_user gu LEFT JOIN user u ON u.id = gu.uid
@@ -855,9 +876,18 @@ export class SqliteBotRepository implements BotRepository {
         if (typeof uid !== "string") throw new TypeError("group_user.uid was not text");
         return { uid, name: optionalText(record, "name"), counts: parseCountMap(raw) };
       });
+    if (pending === null) return stored;
+    const seen = new Set(stored.map((row) => row.uid));
+    for (const member of pending.users) {
+      if (seen.has(member.uid) || omit.has(member.uid)) continue;
+      stored.push({ uid: member.uid, name: member.name, counts: parseCountMap(member._count) });
+    }
+    stored.sort((left, right) => (left.uid < right.uid ? -1 : left.uid > right.uid ? 1 : 0));
+    return stored;
   }
 
   async deleteGroupUsers(groupId: string, userId: string | null): Promise<void> {
+    this.cold.noteDelete(groupId, userId);
     if (userId === null) {
       this.storage.sql.exec("DELETE FROM group_user WHERE gid = ?", groupId);
       return;

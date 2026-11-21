@@ -18,8 +18,6 @@ export interface SchemaSnapshot {
   migrationVersion: number | null;
 }
 
-const MIGRATION_VERSION = 1;
-
 const V1 = [
   `CREATE TABLE IF NOT EXISTS user (
     id TEXT PRIMARY KEY NOT NULL,
@@ -72,6 +70,25 @@ const V1 = [
   )`,
 ];
 
+const V2 = [
+  `CREATE TABLE IF NOT EXISTS cold_group (
+    id TEXT PRIMARY KEY NOT NULL,
+    cursor INTEGER NOT NULL,
+    members INTEGER NOT NULL,
+    done INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS cold_user (
+    id TEXT PRIMARY KEY NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS cold_omit (
+    gid TEXT NOT NULL,
+    uid TEXT NOT NULL,
+    PRIMARY KEY (gid, uid)
+  )`,
+];
+
+const MIGRATIONS = [V1, V2];
+
 const INSPECT_TABLES = [
   "user",
   "group",
@@ -87,17 +104,17 @@ export function migrateSql(sql: SqlStorage): void {
       version INTEGER PRIMARY KEY NOT NULL
     )`,
   );
-  const applied = rows(
-    sql,
-    "SELECT version FROM schema_migrations WHERE version = ?",
-    MIGRATION_VERSION,
-  );
-  if (applied.length > 0) return;
-  for (const statement of V1) sql.exec(statement);
-  sql.exec(
-    "INSERT INTO schema_migrations (version) VALUES (?)",
-    MIGRATION_VERSION,
-  );
+  MIGRATIONS.forEach((statements, index) => {
+    const version = index + 1;
+    const applied = rows(
+      sql,
+      "SELECT version FROM schema_migrations WHERE version = ?",
+      version,
+    );
+    if (applied.length > 0) return;
+    for (const statement of statements) sql.exec(statement);
+    sql.exec("INSERT INTO schema_migrations (version) VALUES (?)", version);
+  });
 }
 
 export function inspectSql(sql: SqlStorage): SchemaSnapshot {
