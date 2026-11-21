@@ -3,7 +3,16 @@
   "name": "line-chat-bot",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-19",
-  "workers_dev": false,
+  // workers.dev only until cutover. Do not add linebot.maou.app or any route without the user online.
+  "workers_dev": true,
+  // invocation_logs records the request URL. Callback paths contain the channel secret.
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": false
+    }
+  },
   "durable_objects": {
     "bindings": [
       {
