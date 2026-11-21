@@ -224,7 +224,7 @@ async function decide(
     }
   }
   if (HELP_ORDERS[parsed.order] === true) return [HELP];
-  const name = source.userId === null ? null : await repo.userName(source.userId);
+  const name = source.userId === null ? null : await currentName(repo, source.userId);
   const keywords = await applyKeywordCommand({
     upsertKeyword: (input) => repo.upsertKeyword(input),
     deleteKeyword: (input) => repo.deleteKeyword(input),
@@ -397,6 +397,11 @@ async function bumpTrigger(
 ): Promise<void> {
   if (source.groupId === null) return;
   await repo.touchAndCount({ source, now, delta: { 觸發: 1 } });
+}
+
+async function currentName(repo: BotRepository, userId: string): Promise<string | null> {
+  const rows = await repo.inspectTouch();
+  return rows.users.find((user) => user.id === userId)?.name ?? null;
 }
 
 async function refreshName(
