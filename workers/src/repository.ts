@@ -136,6 +136,7 @@ export class SqliteBotRepository implements BotRepository {
   };
   private rowsRead = 0;
   private compactJob: CompactJob | null = null;
+  private compactQueue: Promise<void> = Promise.resolve();
 
   private phases(): PhaseTimer {
     return this.timing ? new PhaseTimer(true) : NO_PHASES;
@@ -276,15 +277,31 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async compactKeywordCache(): Promise<KeywordCompact> {
+    const step = this.compactQueue.then(() => this.compactStep());
+    this.compactQueue = step.then(() => undefined, () => undefined);
+    return step;
+  }
+
+  private async compactStep(): Promise<KeywordCompact> {
     const started = performance.now();
     const cache = await this.readyCache(false);
-    if (this.compactJob === null) {
+    let job = this.compactJob;
+    if (job !== null && job.cache !== cache) {
+      // The cache was replaced while this job was in flight, so its base and
+      // loaded set describe a different cache. Drop it and start over.
+      this.compactJob = null;
+      job = null;
+    }
+    if (job === null) {
       if (!this.needsCompact(cache)) {
         return { done: true, ms: performance.now() - started, phase: "idle" };
       }
-      this.compactJob = await this.beginCompact();
+      job = await this.beginCompact(cache);
+      if (this.probeCache !== cache) {
+        return { done: false, ms: performance.now() - started, phase: "restart" };
+      }
+      this.compactJob = job;
     }
-    const job = this.compactJob;
     if (job.phase === "load") {
       const base = cache.table.kind === "overlay" ? cache.table.base : cache.table;
       if (base.kind === "chunked") {
@@ -332,9 +349,14 @@ export class SqliteBotRepository implements BotRepository {
       }
     }
     if (job.phase === "store" && elapsed() < COMPACT_BUDGET_MS) {
-      const done = await this.storeCompactSlice(cache, job, COMPACT_BUDGET_MS - elapsed());
+      const done = await this.storeCompactSlice(job, COMPACT_BUDGET_MS - elapsed());
       if (done) {
         this.compactJob = null;
+        if (this.probeCache !== cache) {
+          // A cache installed during the job may predate the new meta.
+          this.probeCache = null;
+          return { done: false, ms: performance.now() - started, phase: "restart" };
+        }
         const more = this.needsCompact(cache);
         return { done: !more, ms: performance.now() - started, phase: more ? "again" : "done" };
       }
@@ -834,11 +856,10 @@ export class SqliteBotRepository implements BotRepository {
     }
   }
 
-  private async beginCompact(): Promise<CompactJob> {
-    const cache = this.probeCache;
-    if (cache === null) throw new Error("probe cache is missing");
+  private async beginCompact(cache: ProbeCache): Promise<CompactJob> {
     const oldMeta = await this.readMeta();
     return {
+      cache,
       encode: startChunkEncodeJob(cache.table),
       aho: null,
       anchors: [],
@@ -861,7 +882,8 @@ export class SqliteBotRepository implements BotRepository {
     };
   }
 
-  private async storeCompactSlice(cache: ProbeCache, job: CompactJob, budgetMs: number): Promise<boolean> {
+  private async storeCompactSlice(job: CompactJob, budgetMs: number): Promise<boolean> {
+    const cache = job.cache;
     const started = performance.now();
     const machine = job.aho?.machine ?? null;
     if (machine === null) throw new Error("compact store started early");
@@ -1442,6 +1464,7 @@ interface KeywordMeta {
 }
 
 interface CompactJob {
+  cache: ProbeCache;
   encode: ChunkEncodeJob;
   aho: AhoBuild | null;
   anchors: string[];
