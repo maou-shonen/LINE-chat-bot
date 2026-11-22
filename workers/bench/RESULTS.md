@@ -145,3 +145,75 @@ CPU 從 `storage.get` 回來才算，和讀取同一口徑。21 輪。load avera
 門檻滿的時候，常用字 5000 字熱 p95 6ms、冷第一則 p95 6ms。同一狀態下再寫一筆（含那段 compaction）p95 1ms。
 
 學習、疊加、刪除指令和 import 批次都走同一份 delta。import 寫進的 anchor 若是空白，會補成 code point 版 `anchorOf`，跟學習指令同一份函式。這次合併後重跑：常用字熱/冷 p95 都是 5ms，門檻上的讀取 p95 都是 6ms，寫入 p95 最高 2ms。compaction 單段最大 3ms。
+
+# Option C（2026-11-22）
+
+這節量 option C 的真實 blob。資料來自 2026-11-21 快照，只存在 `/tmp/c-blob-build-current` 和本機 workerd，沒有進 repo。機器 16 核，量測時 load average 0.22–0.24。沒有連 Cloudflare。
+
+## 方法
+
+- `npm run bench:c`：miniflare 載入真實 blob。用 `storage.sql.exec` 的 cursor 計 rows read/written，`performance.now()` 計 wall。5 次執行，下表是 5 次的最小到最大。
+- `npm run bench:local`：起 `wrangler dev --local`，用 HTTP 打本機 Worker。從 `/proc` 讀 workerd process 的 utime 加 stime 當 CPU（100 Hz），以及 VmRSS。冷啟動是重啟 workerd 後的第一個請求，3 次。
+- workerd 沒有 isolate CPU 或 heap 指標。CPU 是整個 process，包含 Worker entry 和 DO isolate 啟動，解析度 10 ms。
+
+## 冷啟動關鍵字 blob
+
+真實 blob 的 chunk 是 15,873,670 bytes，2 個 meta 另計，15 個 key 合計 15,873,772 bytes。最大 row chunk 1,300,000 bytes，probe 1,292,596 bytes。每次冷啟動 16 個 `get`（15 個 blob key 加 delta meta）。
+
+| 指標 | 冷啟動 | 暖路徑 |
+|---|---|---|
+| wall | 43.9–48.1 ms | 6.1–6.5 ms |
+| workerd process CPU | 50–60 ms | 0–20 ms |
+| RSS 增量 | +42.8–44.0 MB | +0.8–0.95 MB |
+
+isolate 內 3 輪 decode 是 2–4 ms，decode 只掛 view，沒有複製 15.9 MB。冷啟動的 wall 花在 16 次 KV `get` 和序列化，不是解碼。
+
+## Hydration（659 人）
+
+真實群組 blob 167,184 bytes。第一則訊息觸發 hydration，`HYDRATE_BATCH` 是 80，總共 8 個 alarm 步驟。
+
+| 指標 | 第一則 | 每個 alarm | 合計 |
+|---|---|---|---|
+| wall | 2–3 ms | 最大 2–5 ms | 15–20 ms |
+| rows read | 64 | | 64 |
+| rows written | | | 2,664 |
+
+hydrate 後的群組文字訊息是 1–2 ms、5 rows read、3 rows written。
+
+## 一般訊息
+
+| 訊息 | wall | rows read | rows written |
+|---|---|---|---|
+| 私訊，keyword 冷（DO 內） | 2 ms | 0 | 4 |
+| 私訊，暖 | 0–1 ms | 1 | 1 |
+| 群組文字，已 hydrate | 1–2 ms | 5 | 3 |
+| 觸發回覆（keyword overlay，LINE fetch 為測試替身） | 1–2 ms | 5–6 | 3 |
+
+## `/import/kv`
+
+| key | 大小 | DO 內 wall | HTTP wall | process CPU |
+|---|---|---|---|---|
+| probe chunk | 1,292,596 B | 9–10 ms | 12.8–13.7 ms | 0–30 ms |
+| row chunk | 1,300,000 B | 8–9 ms | 13.2–14.7 ms | 0–20 ms |
+| log chunk | 999,985 B | 10–13 ms | 13.9–15.3 ms | 0–30 ms |
+| 最大群組 | 167,184 B | 3–4 ms | 6.0–6.8 ms | 0–10 ms |
+
+全部 4,717 個 blob、50,763,999 bytes（manifest 另計）一次上傳：12.7 s wall、13.0 s process CPU、RSS 峰值 +550 MB（1 次）。這是 4,717 個請求的瞬時峰值，不是常駐。
+
+## 上傳量與儲存
+
+- put 數 4,718（4,717 個 key 加 `c-manifest`），約每日 100k rows written 的 4.7%。
+- value 50,764,147 bytes（含 manifest），key 184,391 bytes，合計 50.95 MB。
+- 明細：關鍵字 15.87 MB、`keywords_logs` 15.03 MB、群組 14.09 MB、使用者 5.77 MB。
+- 單一 key 最大 1,300,000 bytes，低於 8 MB 上限。
+
+## 重跑
+
+```bash
+cd workers
+npm run blobs -- --sqlite ~/linebot-import/line-snapshot-20261121.db --out /tmp/c-blob-build-current
+C_BLOB_DIR=/tmp/c-blob-build-current C_SNAPSHOT=~/linebot-import/line-snapshot-20261121.db npm run bench:c
+C_BLOB_DIR=/tmp/c-blob-build-current npm run bench:local
+```
+
+結果只印列數、位元組和時間，不印訊息、名稱、關鍵字或 id。

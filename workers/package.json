@@ -8,6 +8,8 @@
   "scripts": {
     "typecheck": "wrangler types src/worker-configuration.d.ts && tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json && tsc --noEmit -p scripts/tsconfig.json",
     "bench": "vitest run --config vitest.bench.config.ts",
+    "bench:c": "vitest run --config vitest.cmeasure.config.ts",
+    "bench:local": "node bench/c-local.mjs",
     "test": "vitest run && node --experimental-strip-types scripts/compare-golden.ts && node --experimental-strip-types --import ./scripts/resolve-ts.mjs --test scripts/build-blobs.test.ts scripts/backfill.test.ts",
     "blobs": "node --experimental-strip-types --import ./scripts/resolve-ts.mjs scripts/build-blobs.ts",
     "backfill": "node --experimental-strip-types --import ./scripts/resolve-ts.mjs scripts/backfill.ts"
