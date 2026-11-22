@@ -10,7 +10,7 @@ describe("sqlite schema", () => {
     await state.migrate();
     const snapshot = await state.inspectSchema();
 
-    expect(snapshot.migrationVersion).toBe(2);
+    expect(snapshot.migrationVersion).toBe(3);
     for (const name of ["user", "group", "group_user", "keywords_logs", "user_keyword", "user_settings"]) {
       expect(snapshot.tables).toContain(name);
     }

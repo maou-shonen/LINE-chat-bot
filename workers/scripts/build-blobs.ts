@@ -15,7 +15,7 @@ import {
   type LogRow,
   type UserShard,
 } from "../src/blob-store.ts";
-import { IMPORT_SECRET_HEADER } from "../src/import-plan.ts";
+import { IMPORT_SECRET_HEADER } from "../src/import-gate.ts";
 
 export interface BuildBlobOptions {
   sqlitePath: string;
@@ -319,21 +319,21 @@ function main(argv: readonly string[]): Promise<void> {
     const flag = argv[i];
     const value = argv[i + 1];
     if (flag === undefined || !flag.startsWith("--") || value === undefined) {
-      throw new Error("usage: build-blobs --sqlite PATH --out DIR [--upload URL --secret SECRET]");
+      throw new Error("usage: build-blobs --sqlite PATH --out DIR [--upload URL]");
     }
     args.set(flag, value);
   }
   const sqlitePath = args.get("--sqlite");
   const outDir = args.get("--out");
   if (sqlitePath === undefined || outDir === undefined) {
-    throw new Error("usage: build-blobs --sqlite PATH --out DIR [--upload URL --secret SECRET]");
+    throw new Error("usage: build-blobs --sqlite PATH --out DIR [--upload URL]");
   }
   return buildBlobs({
     sqlitePath,
     outDir,
     repoRoot: resolve(import.meta.dirname, "../.."),
     upload: args.get("--upload"),
-    secret: args.get("--secret"),
+    secret: process.env.IMPORT_SECRET,
     stdout: (line) => {
       process.stdout.write(`${line}\n`);
     },

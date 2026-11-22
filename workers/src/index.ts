@@ -1,6 +1,6 @@
 import { COLD_BOT_STATE } from "./blob-store";
-import { BotState, GLOBAL_BOT_STATE } from "./bot-state";
-import { IMPORT_SECRET_HEADER, importGate } from "./import-plan";
+import { BotState } from "./bot-state";
+import { IMPORT_SECRET_HEADER, importGate } from "./import-gate";
 import { parseCallbackPath, verifyLineSignature } from "./line";
 
 export { BotState };
@@ -14,11 +14,11 @@ export default {
     if (request.method === "GET" && url.pathname === "/ping") {
       return new Response("pong");
     }
-    if (request.method === "POST" && url.pathname === "/import") {
-      return forwardImport(request, env);
-    }
     if (request.method === "POST" && url.pathname === "/import/kv") {
-      return forwardImport(request, env, "/import/kv", COLD_BOT_STATE);
+      return forwardCold(request, env, "/import/kv");
+    }
+    if (request.method === "POST" && url.pathname === "/export") {
+      return forwardCold(request, env, "/export");
     }
     if (request.method === "POST") {
       const route = parseCallbackPath(url.pathname);
@@ -51,12 +51,7 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-async function forwardImport(
-  request: Request,
-  env: Env,
-  pathname = "/import",
-  objectName = GLOBAL_BOT_STATE,
-): Promise<Response> {
+async function forwardCold(request: Request, env: Env, pathname: string): Promise<Response> {
   const presented = request.headers.get(IMPORT_SECRET_HEADER);
   const gate = importGate(env.IMPORT_SECRET, presented);
   if (gate === "disabled") return new Response("not found", { status: 404 });
@@ -64,7 +59,7 @@ async function forwardImport(
     return new Response("unauthorized", { status: 401 });
   }
   const body = await request.arrayBuffer();
-  const stub = env.BOT_STATE.get(env.BOT_STATE.idFromName(objectName));
+  const stub = env.BOT_STATE.get(env.BOT_STATE.idFromName(COLD_BOT_STATE));
   const headers = new Headers({ "content-type": "application/json" });
   headers.set(IMPORT_SECRET_HEADER, presented);
   return stub.fetch(
