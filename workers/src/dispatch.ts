@@ -9,6 +9,7 @@ import {
   type RngOp,
 } from "./keywords";
 import { createLineClient, deliver } from "./line-client";
+import { NO_PHASES, PhaseTimer } from "./phases";
 import type { BotRepository } from "./repository";
 import { applyRecall } from "./recall";
 import { applyKeywordCommand } from "./commands/keywords";
@@ -88,6 +89,7 @@ const IMAGE_TYPES: Record<string, true> = { "image/jpeg": true, "image/png": tru
 // Runtime settings from Worker secrets. Fixture headers are honored only when FIXTURE_HEADERS is "1"
 // (tests); production uses the real clock, Math.random, Safe Browsing and imgur.
 export interface DispatchEnv {
+  PHASE_TIMING?: string;
   FIXTURE_HEADERS?: string;
   GOOGLE_SAFE_BROWSING_KEY?: string;
   IMGUR_CLIENT_ID?: string;
@@ -104,6 +106,7 @@ type Clock = {
   fetch: typeof fetch;
   live: boolean;
   env: DispatchEnv;
+  phases: PhaseTimer;
 };
 
 export async function handleCallback(
@@ -111,35 +114,54 @@ export async function handleCallback(
   request: Request,
   env: DispatchEnv = { FIXTURE_HEADERS: "1" },
 ): Promise<void> {
+  const phases = env.PHASE_TIMING === "1" ? new PhaseTimer(true) : NO_PHASES;
+  phases.start("total");
   const route = new URL(request.url).pathname.match(/^\/callback\/([^/]+)\/(.+)$/);
   const token = route?.[2] === undefined ? "" : safeDecode(route[2]);
   let payload: unknown = {};
+  phases.start("parse");
   try {
     payload = await request.json();
   } catch {
     payload = {};
   }
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return;
+  phases.end("parse");
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    phases.end("total");
+    phases.flush("callback");
+    return;
+  }
   const events = (payload as { events?: unknown }).events;
-  if (!Array.isArray(events)) return;
+  if (!Array.isArray(events)) {
+    phases.end("total");
+    phases.flush("callback");
+    return;
+  }
+  phases.count("events", events.length);
   const fixture = env.FIXTURE_HEADERS === "1";
   const nowMs = Date.now();
   const epoch = (fixture ? headerNumber(request, "x-frozen-epoch") : null) ?? nowMs / 1000;
   const now = fixture ? request.headers.get("x-frozen-now") ?? "2023-11-14 22:13:20" : taipeiNow(nowMs);
   const rng = fixture ? parseRng(request.headers.get("x-fixture-rng")) : [];
   const safe = fixture ? request.headers.get("x-fixture-safe-browsing") ?? "clean" : "live";
-  for (const event of events) {
-    if (event === null || typeof event !== "object" || Array.isArray(event)) continue;
-    await handleEvent(repo, event as Record<string, unknown>, {
-      token,
-      epoch,
-      now,
-      rng,
-      safe,
-      fetch: fetch.bind(globalThis),
-      live: !fixture,
-      env,
-    });
+  try {
+    for (const event of events) {
+      if (event === null || typeof event !== "object" || Array.isArray(event)) continue;
+      await handleEvent(repo, event as Record<string, unknown>, {
+        token,
+        epoch,
+        now,
+        rng,
+        safe,
+        fetch: fetch.bind(globalThis),
+        live: !fixture,
+        env,
+        phases,
+      });
+    }
+  } finally {
+    phases.end("total");
+    phases.flush("callback");
   }
 }
 
@@ -166,12 +188,18 @@ async function handleEvent(
   const record = message as Record<string, unknown>;
   const kind = record.type;
   if (kind === "sticker") {
+    clock.phases.start("count");
     await applyCountMessage(repo, { kind: "sticker", source }, clock.now);
+    clock.phases.end("count");
+    clock.phases.start("refresh");
     await refreshName(repo, source, clock);
+    clock.phases.end("refresh");
     return;
   }
   if (kind === "image") {
+    clock.phases.start("count");
     await applyCountMessage(repo, { kind: "image", source }, clock.now);
+    clock.phases.end("count");
     if (source.groupId === null && source.userId !== null && typeof record.id === "string") {
       let link: string;
       try {
@@ -182,18 +210,30 @@ async function handleEvent(
       }
       await send(clock, source.userId, replyToken, [link], false);
     }
+    clock.phases.start("refresh");
     await refreshName(repo, source, clock);
+    clock.phases.end("refresh");
     return;
   }
   if (kind !== "text" || typeof record.text !== "string") return;
   const text = record.text;
+  clock.phases.count("texts");
+  clock.phases.count("textChars", text.length);
+  clock.phases.start("count");
   await applyCountMessage(repo, { kind: "text", text, source }, clock.now);
+  clock.phases.end("count");
+  clock.phases.start("decide");
   const replies = await decide(repo, text, source, clock);
+  clock.phases.end("decide");
   const target = source.groupId ?? source.userId;
   if (replies !== null && target !== null) {
+    clock.phases.start("reply");
     await send(clock, target, replyToken, replies);
+    clock.phases.end("reply");
   }
+  clock.phases.start("refresh");
   await refreshName(repo, source, clock);
+  clock.phases.end("refresh");
 }
 
 async function decide(
@@ -202,18 +242,23 @@ async function decide(
   source: { userId: string | null; groupId: string | null },
   clock: Clock,
 ): Promise<readonly string[] | null> {
+  clock.phases.start("normalize");
   const normalized = text.replaceAll('"', "\uFF02").replaceAll("'", "\u2019").replaceAll(";", "\uFF1B");
+  clock.phases.end("normalize");
   const parsed = parseOrder(normalized);
   if (source.groupId !== null) {
+    clock.phases.start("settingsCommand");
     const settings = await applySettingsCommand(repo, {
       text: normalized,
       groupId: source.groupId,
       userId: source.userId,
       epoch: clock.epoch,
     });
+    clock.phases.end("settingsCommand");
     if (settings.kind === "reply") return settings.messages;
     if (LOGS[parsed.order] === true) {
-      return [
+      clock.phases.start("recall");
+      const recalled = [
         await applyRecall(repo, {
           groupId: source.groupId,
           userId: source.userId,
@@ -221,10 +266,15 @@ async function decide(
           value: parsed.value,
         }),
       ];
+      clock.phases.end("recall");
+      return recalled;
     }
   }
   if (HELP_ORDERS[parsed.order] === true) return [HELP];
+  clock.phases.start("userName");
   const name = source.userId === null ? null : await repo.userName(source.userId);
+  clock.phases.end("userName");
+  clock.phases.start("keywordCommand");
   const keywords = await applyKeywordCommand({
     upsertKeyword: (input) => repo.upsertKeyword(input),
     deleteKeyword: (input) => repo.deleteKeyword(input),
@@ -237,13 +287,17 @@ async function decide(
     displayName: name,
     now: clock.now,
   });
+  clock.phases.end("keywordCommand");
   if (keywords.kind === "reply") return keywords.messages;
   if (OPINION[parsed.order] === true) {
     if (parsed.key === null) return [OPINION_HELP];
     if (await pushDeveloper(clock, source, normalized)) return [OPINION_DONE];
     return ["回報功能尚未設定，著急的話請直接聯絡開發者"];
   }
-  return mainReply(repo, normalized, source, clock);
+  clock.phases.start("mainReply");
+  const replies = await mainReply(repo, normalized, source, clock);
+  clock.phases.end("mainReply");
+  return replies;
 }
 
 async function mainReply(
@@ -268,7 +322,9 @@ async function mainReply(
     const forced = await probe(repo, stripped, source.groupId, source.userId, false, false, rng, clock);
     if (forced !== null) {
       script.finish();
+      clock.phases.start("bump");
       await bumpTrigger(repo, source, clock.now);
+      clock.phases.end("bump");
       return forced;
     }
     const personal = source.userId === null
@@ -276,12 +332,16 @@ async function mainReply(
       : await probe(repo, stripped, source.userId, source.userId, false, false, rng, clock);
     if (personal !== null) {
       script.finish();
+      clock.phases.start("bump");
       await bumpTrigger(repo, source, clock.now);
+      clock.phases.end("bump");
       return personal;
     }
   }
   if (source.groupId !== null) {
+    clock.phases.start("sleep");
     const sleep = await settleSleep(repo, { groupId: source.groupId, epoch: clock.epoch });
+    clock.phases.end("sleep");
     if (sleep.kind === "expired") {
       script.finish();
       return sleep.messages;
@@ -291,15 +351,19 @@ async function mainReply(
       return null;
     }
   }
+  clock.phases.start("flags");
   const userFlags = source.groupId === null || source.userId === null
     ? { 個人詞庫: false, 別理我: false }
     : await readUserFlags(repo, source.groupId, source.userId);
+  clock.phases.end("flags");
   if (source.groupId === null || userFlags.個人詞庫) {
     if (source.userId !== null) {
       const hit = await probe(repo, message, source.userId, source.userId, false, false, rng, clock);
       if (hit !== null) {
         script.finish();
+        clock.phases.start("bump");
         await bumpTrigger(repo, source, clock.now);
+        clock.phases.end("bump");
         return hit;
       }
     }
@@ -308,14 +372,18 @@ async function mainReply(
     const hit = await probe(repo, message, source.groupId, source.userId, false, false, rng, clock);
     if (hit !== null) {
       script.finish();
+      clock.phases.start("bump");
       await bumpTrigger(repo, source, clock.now);
+      clock.phases.end("bump");
       return hit;
     }
   }
   if (message.startsWith(NAME) || source.groupId === null) {
+    clock.phases.start("groupFlags");
     const groupFlags = source.groupId === null
       ? { 全回應: false, 全圖片: false }
       : await readGroupFlags(repo, source.groupId);
+    clock.phases.end("groupFlags");
     if (source.groupId === null || groupFlags.全回應) {
       let body = message;
       if (message !== NAME && message.startsWith(NAME)) body = stripEnds(message.slice(NAME.length));
@@ -323,7 +391,9 @@ async function mainReply(
       const hit = await probe(repo, body, null, source.userId, true, excludeUrl, rng, clock);
       if (hit !== null) {
         script.finish();
+        clock.phases.start("bump");
         await bumpTrigger(repo, source, clock.now);
+        clock.phases.end("bump");
         return hit;
       }
       if (source.groupId !== null) {
@@ -350,18 +420,30 @@ async function probe(
   allReply: boolean,
   excludeUrl: boolean,
   rng: Rng,
-  clock: { now: string; fetch: typeof fetch },
+  clock: { now: string; fetch: typeof fetch; phases: PhaseTimer },
 ): Promise<string[] | null> {
-  const rows = await repo.keywordRows({
-    message,
+  const phases = clock.phases;
+  phases.count("probeCalls");
+  phases.start("normalizeMatch");
+  const normalized = normalizeKeywordMessage(message, false);
+  phases.end("normalizeMatch");
+  phases.start("rowsGet");
+  const { rows, candidates } = await repo.keywordMatches({
+    message: normalized,
     scopeId,
     allReply,
     excludeUrl,
     stripName: false,
     rng: [],
+    preNormalized: true,
   });
-  const normalized = normalizeKeywordMessage(message, false);
+  phases.end("rowsGet");
+  phases.count("candidates", candidates);
+  phases.count("matched", rows.length);
+  phases.start("match");
   const winner = normalized === "" ? null : matchKeyword(normalized, rows, { allReply, excludeUrl }, rng);
+  phases.end("match");
+  phases.count("winners", winner === null ? 0 : 1);
   if (winner === null) return null;
   const org = randomOrgUrl(winner, normalized);
   let randomOrg: ((request: { url: string }) => string) | undefined;
@@ -370,7 +452,8 @@ async function probe(
     const text = await response.text();
     randomOrg = () => text;
   }
-  return renderReply({
+  phases.start("render");
+  const rendered = renderReply({
     reply: winner,
     message: normalized,
     userId: userId ?? "",
@@ -378,6 +461,8 @@ async function probe(
     rng,
     randomOrg,
   });
+  phases.end("render");
+  return rendered;
 }
 
 async function readUserFlags(repo: BotRepository, groupId: string, userId: string) {

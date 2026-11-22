@@ -218,16 +218,16 @@ C_BLOB_DIR=/tmp/c-blob-build-current npm run bench:local
 
 結果只印列數、位元組和時間，不印訊息、名稱、關鍵字或 id。
 
-# Option C v4：lazy row chunk + 長訊息（2026-11-22 晚）
+# Option C v4.1：phase timing + 冷啟動/長訊息（2026-11-22 深夜）
 
-這一輪把關鍵字語料改成「冷啟動只載入 automaton，命中才讀 row chunk」，並修長訊息的取列與字串解碼。格式升到 version 4，舊 gen 1 / v3 的 key 不再讀取。
+這一輪在 v4 的 lazy row chunk 上加入 `PHASE_TIMING=1` 分段計時，並把冷啟動的 meta/delta meta 與 row chunk 讀取合併成 multi-get、快取同一訊息的 anchor 命中、長訊息只解碼可能命中的列。格式仍是 version 4，舊 gen 1 / v3 的 key 不再讀取。
 
 ## 格式
 
 - 10 個 key：`keyword-cache-meta`（JSON，361 bytes）、`keyword-aho-1-0`（1,292,596 bytes）、`keyword-rows-1-0..7`。
 - row chunk 8 塊，合計 14,784,930 bytes，最大 1,987,892 bytes。單一 key 仍低於 8 MB。
 - row chunk 內容是自己可解碼的 v4 格式：header、依 anchor hash 排序的 group、keyword hash 索引、pool、每列含全域 ordinal 的 rowMeta、UTF-16 字元池。
-- 冷啟動固定 3 個 `get`：meta、aho、delta meta。沒有命中就不讀 row chunk；命中時只讀該 anchor 的 chunk，同一個 chunk 只讀一次，之後留在記憶體。
+- 冷啟動固定 2 個 `get`：meta 與 delta meta 用一次 multi-get，automaton 再一次。沒有命中就不讀 row chunk；命中時只讀該 anchor 的 chunk（一次 multi-get），同一個 chunk 只讀一次，之後留在記憶體。
 - overlay 套在 lazy base 上。delta 只在套用到的 anchor 上載入 chunk；compaction 時先分批載入全部 chunk，再分批掃描、配置、填入與排序，最後一次換 meta。
 - `emptyAnchor` 記在 meta。沒有空 anchor 的語料，空字串命中不會載入任何 chunk。
 
@@ -237,34 +237,59 @@ C_BLOB_DIR=/tmp/c-blob-build-current npm run bench:local
 
 | 項目 | 數字 |
 |---|---|
-| 冷啟動 keyword blob | 10 個 key，16,077,526 bytes（meta 361 bytes 另計）；每輪 3 個 `get` |
+| 冷啟動 keyword blob | 10 個 key，16,077,526 bytes（meta 361 bytes 另計）；每輪 2 個 `get`（meta、aho） |
 | 冷啟動 decode | 0 ms（automaton 零複製 view） |
 | 冷啟動 request（decode 後） | 0–1 ms |
 | 5000 字，真實語料，1591 候選 | scan 1 ms、fetch 2 ms、match 1 ms |
 | 同一則暖路徑 | p50 3 ms、p95 4 ms、max 4 ms |
-| 同一則冷路徑 | p50 18 ms、p95 24 ms（要載入全部 8 個 row chunk） |
+| 同一則冷路徑 | p50 17 ms、p95 21 ms、max 22 ms（要載入全部 8 個 row chunk） |
 | compaction 單段 | 280–293 段，最大 3 ms（偶發 13 ms wall 尖峰） |
 
 `bench/probe.bench.ts`（合成 50,929 列、24,711 anchor、3452 候選）：
 
 | 訊息 | 熱 p50 | 熱 p95 | 熱 max | 冷 request p95 |
 |---|---|---|---|---|
-| 5000 字，常用字頻率 | 5 ms | 6–7 ms | 8 ms | 8–9 ms |
-| 5000 字，均勻 CJK | 1 ms | 1 ms | 2 ms | 6 ms |
-| 24 / 300 / 1000 字 | 0 ms | ≤1 ms | 1 ms | 2 ms |
-| at-cap（32 pending）冷 | 5 ms | 9 ms | — | 9 ms |
+| 5000 字，常用字頻率 | 4 ms | 5 ms | 6 ms | 10 ms |
+| 5000 字，均勻 CJK | 1 ms | 1 ms | 1 ms | 5 ms |
+| 24 / 300 / 1000 字 | 0 ms | 0–1 ms | 1 ms | 2 ms |
+| at-cap（32 pending）冷 | 5 ms | 5 ms | — | 8 ms |
 
 `npm run bench:local`（`wrangler dev --local`，重啟 workerd，3 次）：
 
 | 項目 | v4 | 舊版（v3） |
 |---|---|---|
-| 冷啟動第一則私訊 wall | 14.5–17.7 ms | 43.9–48.1 ms |
-| 冷啟動 process CPU | 0–20 ms（10 ms 解析度） | 50–60 ms |
-| 冷啟動 RSS 增量 | +7.0–11.4 MB | +42.8–44.0 MB |
-| 暖路徑 wall | 4.3–5.3 ms | 6.1–6.5 ms |
-| 5000 字第一則 wall | 32.8–38.2 ms | 未量 |
-| 5000 字暖路徑 wall | 10.6–12.4 ms | 未量 |
-| 5000 字暖路徑 process CPU | 10–30 ms（10 ms 解析度） | 未量 |
+| 冷啟動第一則私訊 wall | 15.1–18.3 ms | 43.9–48.1 ms |
+| 冷啟動 process CPU | 20 ms（10 ms 解析度） | 50–60 ms |
+| 冷啟動 RSS 增量 | +8.0–12.4 MB | +42.8–44.0 MB |
+| 暖路徑 wall | 4.5–4.7 ms | 6.1–6.5 ms |
+| 5000 字第一則 wall | 30.6–31.8 ms | 未量 |
+| 5000 字暖路徑 wall | 6.9–8.5 ms | 未量 |
+| 5000 字暖路徑 process CPU | 10–20 ms（10 ms 解析度） | 未量 |
+
+## Phase timing
+
+`PHASE_TIMING=1` 時，DO 會在每個操作結束時印一行 `phase {json}`。只有固定的 phase 名稱、毫秒數與計數，沒有訊息、id、關鍵字或回覆。預設是 `0`。
+
+| phase | 本機樣本 |
+|---|---|
+| `startup` constructor / migrate | 0 ms / 0–1 ms；模組初始化在 workerd 的 `Date.now()` 下不可觀測 |
+| `cacheLoad` coldGet / ahoChunkGet / ahoDecode | 2–3 ms / 1–2 ms / 0 ms（aho 1,292,596 bytes） |
+| 冷啟動短訊息 `callback.total` | 9–12 ms |
+| 冷啟動短訊息 `keywordMatches` | cache 3–5 ms；chunkGet 2–3 ms；rows 0 ms |
+| 冷啟動 5000 字 `callback.total` | 27 ms |
+| 冷啟動 5000 字 chunk multi-get | 18–19 ms（7 chunks、12,886,360 bytes）；decode 0 ms；match 1 ms |
+| 暖 5000 字 `callback.total` | 3–4 ms；rowsGet 2–3 ms；match 0–1 ms |
+| 暖 5000 字 probe | 2 次 probe；第一次 rows 1–2 ms、第二次 0–1 ms；hits cache 命中；candidates 1591、matched 467 |
+
+分段點放在 storage 與網路 I/O 的邊界。Cloudflare 的 `Date.now()` 在同步 CPU 期間不會前進，所以這些 span 是 wall/I/O 邊界，不是純 CPU；真正的 CPU 要看 `wrangler tail` 的 `cpuTime`。本機 `wrangler dev` 的模組初始化在 `Date.now()` 下不可觀測。
+
+重跑：
+
+```bash
+C_PHASE=1 C_ROUNDS=1 npm run bench:local
+```
+
+要量 Cloudflare，部署時把 `PHASE_TIMING` 設成 `"1"`，送短訊息、暖長訊息、冷長訊息，再用 `wrangler tail` 讀 `phase` 行。量完把 `PHASE_TIMING` 設回 `"0"`。
 
 ## 上傳
 
@@ -276,9 +301,12 @@ C_BLOB_DIR=/tmp/c-blob-build-current npm run bench:local
 
 ## 限制
 
-- workerd 沒有 isolate CPU；process CPU 解析度 10 ms，0–20 ms 只能說「低於或接近 10 ms」。冷啟動 decode 本身在 c-measure 是 0 ms。
-- 冷啟動後第一則若是 5000 字且命中大量 anchor，會讀完全部 8 個 row chunk（14.8 MB），`bench:c` 的冷長訊息 p95 是 24 ms。這是 lazy chunk 的資料量下限，不是 probe 的成本；暖長訊息 p95 4 ms。
+- workerd 沒有 isolate CPU；process CPU 解析度 10 ms，10–30 ms 只能說「約 1–3 個 tick」。冷啟動 decode 本身在 c-measure 是 0 ms。
+- 冷啟動的 JS 分段（migrate 加 callback，cacheLoad 在 callback 內）合計約 9–13 ms，其餘是 Worker/DO isolate 啟動與模組初始化；這部分在本機的 `Date.now()` 不可觀測，需用 Cloudflare `cpuTime` 對照。
+- 冷啟動後第一則若是 5000 字且命中大量 anchor，會讀完全部 8 個 row chunk（14.8 MB），`bench:c` 的冷長訊息 p95 是 21 ms。這是 lazy chunk 的資料量下限，不是 probe 的成本；暖長訊息 p95 4 ms（c-measure 的 select 路徑），完整 callback 是 6.9–8.5 ms（bench:local）。
 - `listKeywords`、`inspectKeywords` 冷啟動會載入全部 chunk；scoped list 冷路徑約 24–27 ms wall。
+- 暖 miss 的 9–18 ms 尖峰在本機沒有重現；`PHASE_TIMING` 會把 `touch.sql`、`refresh`、`cacheLoad`、`alarm`、`callback.total` 分開，CF 上可直接看是哪一段。
+- `bench:local` 的長訊息已加固定 rng，回覆才會完成；舊表的 10.6–12.4 ms 可能是 DO 端在 `rng script missing choice` 失敗後的 process CPU，不是有效回覆（推測）。
 - `bench:c` 的 request 是 wall；10 ms 以下的差異受 miniflare 排程影響。`bench:local` 的 CPU 是整個 process。
 
 ## 重跑

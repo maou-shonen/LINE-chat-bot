@@ -110,7 +110,7 @@ describe("keyword base blob", () => {
     await spyGets(stub);
     await reset(stub);
     const first = await readGets(stub);
-    expect(first).toBe(3);
+    expect(first).toBe(2);
     expect(rowKeys(await readGetKeys(stub))).toEqual([]);
 
     expect(replies(await stub.selectKeywordReplies(query("kw50", "C1")))).toEqual(["r50"]);
@@ -128,6 +128,16 @@ describe("keyword base blob", () => {
     const meter = await installMeter(stub);
     expect(replies(await stub.selectKeywordReplies(query("kw60", "C1")))).toEqual(["r60"]);
     expect(await readMeter(stub)).toBe(0);
+  });
+
+  it("invalidates cached hits after a new keyword is written", async () => {
+    await putBase([{ id: "C1", keyword: "anchorone", reply: "base" }]);
+    await reset(stub);
+    const message = "aanchoronezzanchoronexezzze";
+    const q = { ...query(message, "C1"), rng: [{ op: "choice" as const, index: 0 }] };
+    expect(replies(await stub.selectKeywordReplies(q))).toEqual(["base"]);
+    expect(await stub.upsertKeyword(write("C1", "anchoronexe", "new", false))).toBe("written");
+    expect(replies(await stub.selectKeywordReplies(q))).toEqual(["new"]);
   });
 
   it("overrides a lazily loaded base chunk without reading it again", async () => {
@@ -185,10 +195,11 @@ async function spyGets(stub: DurableObjectStub<BotState>): Promise<void> {
     const box = { n: 0, keys: [] as string[] };
     (globalThis as unknown as { __kwGets: typeof box }).__kwGets = box;
     const get = state.storage.get.bind(state.storage);
-    state.storage.get = (async (key: string) => {
+    state.storage.get = (async (key: string | string[]) => {
       box.n += 1;
-      box.keys.push(key);
-      return get(key);
+      if (Array.isArray(key)) box.keys.push(...key);
+      else box.keys.push(key);
+      return (get as (key: string | string[]) => Promise<unknown>)(key);
     }) as typeof state.storage.get;
   });
 }

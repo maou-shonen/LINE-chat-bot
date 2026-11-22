@@ -122,14 +122,14 @@ export function migrateSql(sql: SqlStorage): void {
       version INTEGER PRIMARY KEY NOT NULL
     )`,
   );
+  const applied = new Set(
+    rows(sql, "SELECT version FROM schema_migrations").map((row) =>
+      requiredNumber(row, "version"),
+    ),
+  );
   MIGRATIONS.forEach((statements, index) => {
     const version = index + 1;
-    const applied = rows(
-      sql,
-      "SELECT version FROM schema_migrations WHERE version = ?",
-      version,
-    );
-    if (applied.length > 0) return;
+    if (applied.has(version)) return;
     for (const statement of statements) sql.exec(statement);
     sql.exec("INSERT INTO schema_migrations (version) VALUES (?)", version);
   });

@@ -12,6 +12,7 @@ interface ColdGroup {
 export class Hydrator {
   private readonly users = new Set<string>();
   private readonly groups = new Set<string>();
+  private readonly blobs = new Map<string, GroupBlob | null>();
 
   constructor(
     private readonly storage: DurableObjectStorage,
@@ -109,7 +110,10 @@ export class Hydrator {
         userId,
       );
     });
-    if (userId === null) this.groups.add(groupId);
+    if (userId === null) {
+      this.groups.add(groupId);
+      this.blobs.delete(groupId);
+    }
   }
 
   async pump(): Promise<boolean> {
@@ -122,8 +126,11 @@ export class Hydrator {
   }
 
   private async readBlob(groupId: string): Promise<GroupBlob | null> {
+    if (this.blobs.has(groupId)) return this.blobs.get(groupId) ?? null;
     const key = groupBlobKeyOrNull(groupId);
-    return key === null ? null : asGroupBlob(await this.storage.get(key));
+    const blob = key === null ? null : asGroupBlob(await this.storage.get(key));
+    this.blobs.set(groupId, blob);
+    return blob;
   }
 
   private async ensureHeader(groupId: string): Promise<void> {
@@ -202,7 +209,10 @@ export class Hydrator {
         done ? 1 : 0,
         groupId,
       );
-      if (done) this.groups.add(groupId);
+      if (done) {
+        this.groups.add(groupId);
+        this.blobs.delete(groupId);
+      }
     });
     const after = this.readGroup(groupId);
     if (after !== null && !after.done) await this.storage.setAlarm(Date.now() + 10);

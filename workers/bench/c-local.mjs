@@ -14,6 +14,9 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const SECRET = "bench";
 const NO_MATCH = "&".repeat(20);
 const LONG = weightedText(5000, 2);
+const PHASE = process.env.C_PHASE === "1";
+const ROUNDS = Number(process.env.C_ROUNDS ?? 3);
+const phaseLines = [];
 const files = readdirSync(BLOBS)
   .filter((name) => name !== "c-manifest.json")
   .map((name) => ({ name, size: statSync(join(BLOBS, name)).size }));
@@ -29,7 +32,7 @@ try {
   for (const [kind, file] of Object.entries(pickMax())) {
     if (file === null) continue;
     max[kind] = [];
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < ROUNDS; i += 1) {
       max[kind].push(await measure(kind, async () => (await uploadBlob(file)).status));
     }
   }
@@ -37,13 +40,13 @@ try {
   const warm = [];
   const longCold = [];
   const longWarm = [];
-  for (let i = 0; i < 3; i += 1) {
+  for (let i = 0; i < ROUNDS; i += 1) {
     await stop();
     child = await start();
     cold.push(await measure("coldDm", () => callback(dm("Ubench-measure-user", NO_MATCH)), 500));
     warm.push(await measure("warmDm", () => callback(dm("Ubench-measure-user", NO_MATCH)), 200));
-    longCold.push(await measure("longCold", () => callback(dm("Ubench-measure-user", LONG)), 500));
-    longWarm.push(await measure("longWarm", () => callback(dm("Ubench-measure-user", LONG)), 500));
+    longCold.push(await measure("longCold", () => callback(dm("Ubench-measure-user", LONG), [{ op: "choice", index: 0 }]), 500));
+    longWarm.push(await measure("longWarm", () => callback(dm("Ubench-measure-user", LONG), [{ op: "choice", index: 0 }]), 500));
   }
   console.log(
     "C_LOCAL",
@@ -56,6 +59,7 @@ try {
       warm,
       longCold,
       longWarm,
+      phaseLines: phaseLines.length,
     }),
   );
 } finally {
@@ -85,11 +89,21 @@ async function start() {
   const proc = spawn(
     "npx",
     ["wrangler", "dev", "--local", "--port", String(PORT), "--persist-to", STATE,
-      "--var", `IMPORT_SECRET:${SECRET}`, "--var", "FIXTURE_HEADERS:1"],
-    { cwd: new URL("..", import.meta.url).pathname, detached: true, stdio: ["ignore", "ignore", "pipe"] },
+      "--var", `IMPORT_SECRET:${SECRET}`, "--var", "FIXTURE_HEADERS:1",
+      ...(PHASE ? ["--var", "PHASE_TIMING:1"] : [])],
+    { cwd: new URL("..", import.meta.url).pathname, detached: true, stdio: ["ignore", PHASE ? "pipe" : "ignore", "pipe"] },
   );
   let stderr = "";
   proc.stderr.on("data", (chunk) => { stderr += chunk; });
+  if (PHASE) {
+    proc.stdout.on("data", (chunk) => {
+      for (const line of String(chunk).split("\n")) {
+        if (!line.includes("phase")) continue;
+        phaseLines.push(line);
+        console.log("C_PHASE", line.trim());
+      }
+    });
+  }
   for (let i = 0; i < 120; i += 1) {
     await sleep(500);
     try {
@@ -178,12 +192,16 @@ async function uploadBlob(file) {
   });
 }
 
-async function callback(event) {
+async function callback(event, rng = []) {
   const body = JSON.stringify({ destination: "bench", events: [event] });
   const signature = createHmac("sha256", SECRET).update(body).digest("base64");
   return fetch(`${BASE}/callback/${SECRET}/${SECRET}`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-line-signature": signature },
+    headers: {
+      "content-type": "application/json",
+      "x-line-signature": signature,
+      "x-fixture-rng": JSON.stringify(rng),
+    },
     body,
   });
 }

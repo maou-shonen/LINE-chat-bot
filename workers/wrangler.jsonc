@@ -5,6 +5,10 @@
   "compatibility_date": "2026-11-19",
   // workers.dev only until cutover. Do not add linebot.maou.app or any route without the user online.
   "workers_dev": true,
+  // Opt-in diagnostic logging. Values are fixed phase names and numbers only.
+  "vars": {
+    "PHASE_TIMING": "0"
+  },
   // invocation_logs records the request URL. Callback paths contain the channel secret.
   "observability": {
     "enabled": true,
@@ -32,6 +36,10 @@
       "name": "line-chat-bot-staging",
       // workers.dev only. Do not add linebot.maou.app or any production route.
       "workers_dev": true,
+      // wrangler does not inherit vars. Keep the default off here too.
+      "vars": {
+        "PHASE_TIMING": "0"
+      },
       "durable_objects": {
         "bindings": [
           {

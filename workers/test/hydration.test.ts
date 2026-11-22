@@ -35,7 +35,8 @@ describe("cold hydration", () => {
     await spyGets(stub);
     await stub.recordMessage(text("G1", "U1", "hi"), NOW);
     const afterFirst = await readGets(stub);
-    expect(afterFirst).toBeGreaterThan(0);
+    // One user shard plus one group blob. The in-flight hydrate reuses the blob.
+    expect(afterFirst).toBe(2);
     const row = await groupRow(stub, "G1");
     expect(row.create_on).toBe("2019-01-01 00:00:00");
     expect(row._id).toBe("legacy");
