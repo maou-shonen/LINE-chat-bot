@@ -10,8 +10,8 @@ describe("sqlite schema", () => {
     await state.migrate();
     const snapshot = await state.inspectSchema();
 
-    expect(snapshot.migrationVersion).toBe(3);
-    for (const name of ["user", "group", "group_user", "keywords_logs", "user_keyword", "user_settings"]) {
+    expect(snapshot.migrationVersion).toBe(4);
+    for (const name of ["user", "group", "group_user", "keywords_logs", "user_keyword", "user_settings", "group_user_tombstone"]) {
       expect(snapshot.tables).toContain(name);
     }
 
@@ -30,6 +30,17 @@ describe("sqlite schema", () => {
     expect(column(snapshot, "group_user", "uid")).toMatchObject({ notNull: true, primaryKey: 2 });
     expect(emptyDefault(column(snapshot, "group_user", "gid").defaultValue)).toBe(true);
     expect(emptyDefault(column(snapshot, "group_user", "uid").defaultValue)).toBe(true);
+
+    expect(column(snapshot, "group_user_tombstone", "gid")).toMatchObject({
+      notNull: true,
+      primaryKey: 1,
+    });
+    expect(column(snapshot, "group_user_tombstone", "uid")).toMatchObject({
+      notNull: true,
+      primaryKey: 2,
+    });
+    expect(emptyDefault(column(snapshot, "group_user_tombstone", "gid").defaultValue)).toBe(true);
+    expect(emptyDefault(column(snapshot, "group_user_tombstone", "uid").defaultValue)).toBe(true);
 
     expect(column(snapshot, "user_keyword", "anchor").notNull).toBe(true);
     const names = snapshot.indexes.map((index) => index.name);
