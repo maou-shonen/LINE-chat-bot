@@ -809,7 +809,14 @@ export class SqliteBotRepository implements BotRepository {
     if (phases.enabled) phases.add("chunkGet", performance.now() - getStart);
     for (let i = 0; i < ids.length; i += 1) {
       const raw = asBytes(values.get(keys[i] ?? ""));
-      if (raw === null) throw new TypeError("keyword row chunk was missing");
+      if (raw === null) {
+        const meta = await this.readMeta();
+        const genKeys = await this.storage.list({ prefix: `keyword-rows-${base.gen}-` });
+        const metaKeys = meta === null ? null : await this.storage.list({ prefix: `keyword-rows-${meta.rowGen}-` });
+        throw new TypeError(
+          `keyword row chunk was missing gen=${base.gen} id=${ids[i]} chunks=${base.chunkCount} metaGen=${meta?.rowGen} metaChunks=${meta?.rowChunks} genKeys=${genKeys.size} metaKeys=${metaKeys?.size}`,
+        );
+      }
       phases.count("chunkBytes", raw.byteLength);
       const decodeStart = phases.enabled ? performance.now() : 0;
       const chunk = decodeKeywordTable(raw);
