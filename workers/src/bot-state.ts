@@ -53,6 +53,7 @@ export class BotState extends DurableObject<Env> {
     this.timing = String(env.PHASE_TIMING) === "1";
     this.repo = new SqliteBotRepository(
       ctx.storage,
+      (task) => ctx.waitUntil(task),
       ctx.id.name === COLD_BOT_STATE,
       this.timing,
     );

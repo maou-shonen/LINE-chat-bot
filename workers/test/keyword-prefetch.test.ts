@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { BotState } from "../src/bot-state";
 import type { KeywordSelect } from "../src/keywords";
@@ -91,13 +91,14 @@ async function expectAuditMatches(state: DurableObjectStub<BotState>, message: s
 }
 
 describe("keyword chunk prefetch", () => {
-  it("prefetches every row chunk two at a time", async () => {
+  it("prefetches every row chunk one at a time", async () => {
     const prefix = "pa";
     const state: DurableObjectStub<BotState> = env.BOT_STATE.get(
       env.BOT_STATE.idFromName(`prefetch-a-${crypto.randomUUID()}`),
     );
     await state.putKeywords(rows(prefix, 48));
     await finish(state);
+    await runInDurableObject(state, (_instance, ctx) => ctx.storage.deleteAlarm());
     await spyGets(state);
     await installMeter(state);
     await state.measureColdRequest(query("", null), 1);
@@ -105,17 +106,105 @@ describe("keyword chunk prefetch", () => {
     expect(cold.rowChunksLoaded).toBe(0);
     expect(cold.rowChunks).toBe(64);
 
-    expect(await runAlarms(state, 40)).toBe(true);
+    expect(await runAlarms(state, 80)).toBe(true);
 
     const { calls, written, gen } = await readSpy(state);
     const rowKeys = calls.flat().filter((key) => key.startsWith("keyword-rows-"));
     const expected = new Set(Array.from({ length: 64 }, (_, id) => `keyword-rows-${gen}-${id}`));
     expect(new Set(rowKeys)).toEqual(expected);
     for (const call of calls) {
-      expect(call.filter((key) => key.startsWith("keyword-rows-")).length).toBeLessThanOrEqual(2);
+      expect(call.filter((key) => key.startsWith("keyword-rows-")).length).toBeLessThanOrEqual(1);
     }
     expect(written).toBe(0);
     await expectAuditMatches(state, `zz${prefix}7anchorzz`);
+  });
+
+  it("schedules prefetch after the reply and keeps an earlier alarm", async () => {
+    const prefix = "pd";
+    const state: DurableObjectStub<BotState> = env.BOT_STATE.get(
+      env.BOT_STATE.idFromName(`prefetch-d-${crypto.randomUUID()}`),
+    );
+    await state.putKeywords(rows(prefix, 48));
+    await finish(state);
+    const earlier = Date.now() - 1000;
+
+    const seen = await runInDurableObject(state, async (instance: BotState, ctx) => {
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let resume = () => {};
+      const resumed = new Promise<void>((resolve) => { resume = resolve; });
+      let gets = 0;
+      let sets = 0;
+      const setAlarm = ctx.storage.setAlarm.bind(ctx.storage);
+      ctx.storage.getAlarm = async () => {
+        gets += 1;
+        await gate;
+        resume();
+        return earlier;
+      };
+      ctx.storage.setAlarm = async (at: number) => {
+        sets += 1;
+        return setAlarm(at);
+      };
+      await instance.measureKeywordWrite({ op: "put", id: "g", keyword: `zz${prefix}write`, reply: "w", cold: true });
+      const atReply = { gets, sets };
+      release();
+      await resumed;
+      for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+      return { atReply, sets, alarm: await ctx.storage.getAlarm() };
+    });
+
+    expect(seen.atReply).toEqual({ gets: 1, sets: 0 });
+    expect(seen.sets).toBe(0);
+    expect(seen.alarm).toBe(earlier);
+  });
+
+  it("sets an alarm after the reply and then loads one chunk", async () => {
+    const prefix = "pe";
+    const state: DurableObjectStub<BotState> = env.BOT_STATE.get(
+      env.BOT_STATE.idFromName(`prefetch-e-${crypto.randomUUID()}`),
+    );
+    await state.putKeywords(rows(prefix, 48));
+    await finish(state);
+
+    const seen = await runInDurableObject(state, async (instance: BotState, ctx) => {
+      await ctx.storage.deleteAlarm();
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let resume = () => {};
+      const resumed = new Promise<void>((resolve) => { resume = resolve; });
+      let schedule = () => {};
+      const scheduled = new Promise<void>((resolve) => { schedule = resolve; });
+      let gets = 0;
+      let sets = 0;
+      const getAlarm = ctx.storage.getAlarm.bind(ctx.storage);
+      const setAlarm = ctx.storage.setAlarm.bind(ctx.storage);
+      ctx.storage.getAlarm = async () => {
+        gets += 1;
+        await gate;
+        const at = await getAlarm();
+        resume();
+        return at;
+      };
+      ctx.storage.setAlarm = async (at: number) => {
+        sets += 1;
+        schedule();
+        return setAlarm(at);
+      };
+      await instance.measureKeywordWrite({ op: "put", id: "g", keyword: `zz${prefix}write`, reply: "w", cold: true });
+      const atReply = { gets, sets };
+      release();
+      await resumed;
+      await scheduled;
+      return { atReply, sets };
+    });
+
+    expect(seen.atReply).toEqual({ gets: 1, sets: 0 });
+    expect(seen.sets).toBe(1);
+    const before = await state.keywordCacheStats();
+    expect(await runDurableObjectAlarm(state)).toBe(true);
+    const after = await state.keywordCacheStats();
+    expect(after.rowChunksLoaded - before.rowChunksLoaded).toBe(1);
   });
 
   it("keeps replies equal to sql while prefetch runs", async () => {
@@ -132,7 +221,7 @@ describe("keyword chunk prefetch", () => {
     });
     await expectAuditMatches(state, `zz${prefix}7anchorzz`);
 
-    expect(await runAlarms(state, 40)).toBe(true);
+    expect(await runAlarms(state, 80)).toBe(true);
     await expectAuditMatches(state, `zz${prefix}7anchorzz`);
   });
 

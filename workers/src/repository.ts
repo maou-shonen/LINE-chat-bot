@@ -71,7 +71,8 @@ const EXPORT_SQL: Record<ExportTable, { from: string; columns: string }> = {
 
 const DELTA_META_KEY = "keyword-row-delta-meta";
 const COMPACT_BUDGET_MS = 1;
-const PREFETCH_CHUNKS = 2;
+// ~230 KB and 2-2.5 ms DO CPU per chunk; one per alarm keeps the step far under the 10 ms alarm budget.
+const PREFETCH_CHUNKS = 1;
 const PREFETCH_DELAY_MS = 50;
 export const KEYWORD_DELTA_LIMIT = 32;
 const STORE_SLICE_BYTES = 200_000;
@@ -125,6 +126,7 @@ export class SqliteBotRepository implements BotRepository {
 
   constructor(
     private readonly storage: DurableObjectStorage,
+    private readonly defer: (task: Promise<void>) => void,
     hydrate = false,
     private readonly timing = false,
   ) {
@@ -678,7 +680,7 @@ export class SqliteBotRepository implements BotRepository {
     const loaded = await this.loadCold(phases);
     const cache = await this.installCache(loaded.meta, loaded.aho, loaded.delta, phases);
     phases.flush("cacheLoad");
-    await this.schedulePrefetch(cache);
+    this.defer(this.deferPrefetch(cache));
     return cache;
   }
 
@@ -855,6 +857,18 @@ export class SqliteBotRepository implements BotRepository {
     if (cache === null) return 0;
     const base = cache.table.kind === "overlay" ? cache.table.base : cache.table;
     return base.kind === "chunked" ? base.loaded.size : 0;
+  }
+
+  private async deferPrefetch(cache: ProbeCache): Promise<void> {
+    const phases = this.phases();
+    phases.start("prefetchSchedule");
+    try {
+      await this.schedulePrefetch(cache);
+    } catch {
+      phases.count("prefetchScheduleErrors");
+    }
+    phases.end("prefetchSchedule");
+    phases.flush("prefetchSchedule");
   }
 
   private async schedulePrefetch(cache: ProbeCache): Promise<void> {
