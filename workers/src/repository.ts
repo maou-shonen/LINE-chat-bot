@@ -26,22 +26,27 @@ import {
   type KeywordSelect,
   type KeywordSelectResult,
 } from "./keywords";
-import { BLOB_CHUNK_BYTES } from "./blob-store";
+import { BLOB_CHUNK_BYTES, KEYWORD_CACHE_META_KEY, KEYWORD_CACHE_VERSION, ahoChunkKey, rowChunkKey } from "./blob-store";
 import {
   applyOverlayOp,
   applyRowDelta,
   decodeKeywordTable,
   deleteKeywordRow,
   emptyKeywordTable,
+  encodeKeywordRows,
   findKeywordRow,
+  KEYWORD_CHUNK_COUNT,
+  keywordChunk,
   listKeywordTexts,
+  registerChunk,
   rowsForHits,
   snapshotRows,
-  startEncodeJob,
-  stepEncodeJob,
+  startChunkEncodeJob,
+  stepChunkEncodeJob,
   upsertKeywordRow,
   visitKeywordRows,
-  type EncodeJob,
+  type ChunkEncodeJob,
+  type ChunkedKeywordTable,
   type KeywordStore,
   type KeywordTable,
   type RowDeltaOp,
@@ -60,8 +65,6 @@ const EXPORT_SQL: Record<ExportTable, { from: string; columns: string }> = {
   keyword_tombstone: { from: "keyword_tombstone", columns: "id, keyword" },
 };
 
-const CACHE_META_KEY = "keyword-probe-cache-meta";
-const ROW_META_KEY = "keyword-row-cache-meta";
 const DELTA_META_KEY = "keyword-row-delta-meta";
 const COMPACT_BUDGET_MS = 1;
 export const KEYWORD_DELTA_LIMIT = 32;
@@ -202,6 +205,7 @@ export class SqliteBotRepository implements BotRepository {
   async putKeywords(rows: KeywordSeed[]): Promise<void> {
     if (rows.length === 0) return;
     const cache = await this.readyCache(false);
+    await this.ensureChunksForAnchors(cache.table, rows.map((row) => anchorOf(row.keyword)));
     const ops: RowDeltaOp[] = [];
     this.storage.transactionSync(() => {
       for (const row of rows) {
@@ -229,6 +233,7 @@ export class SqliteBotRepository implements BotRepository {
     if (keyword === undefined) throw new TypeError("keyword is missing");
     const cache = await this.readyCache(false);
     const anchor = anchorOf(keyword);
+    await this.ensureChunksForAnchors(cache.table, [anchor]);
     this.storage.sql.exec(
       "DELETE FROM user_keyword WHERE id = ? AND keyword = ?",
       id,
@@ -251,10 +256,26 @@ export class SqliteBotRepository implements BotRepository {
       this.compactJob = await this.beginCompact();
     }
     const job = this.compactJob;
+    if (job.phase === "load") {
+      const base = cache.table.kind === "overlay" ? cache.table.base : cache.table;
+      if (base.kind === "chunked") {
+        const batch: number[] = [];
+        while (job.loadAt < base.chunkCount && batch.length < 4) {
+          if (!base.loaded.has(job.loadAt)) batch.push(job.loadAt);
+          job.loadAt += 1;
+        }
+        await Promise.all(batch.map((id) => this.loadChunk(base, id)));
+        if (job.loadAt < base.chunkCount) {
+          return { done: false, ms: performance.now() - started, phase: "load" };
+        }
+      }
+      job.phase = "encode";
+      return { done: false, ms: performance.now() - started, phase: "encode" };
+    }
     if (job.phase === "encode") {
-      const done = stepEncodeJob(job.encode, COMPACT_BUDGET_MS);
+      const done = stepChunkEncodeJob(job.encode, COMPACT_BUDGET_MS);
       if (done) {
-        job.anchors = job.encode.groups.map((group) => group.anchor).filter((anchor) => anchor !== "");
+        job.anchors = job.encode.anchors;
         job.phase = "aho";
         job.aho = startAhoBuild(job.anchors);
         return { done: false, ms: performance.now() - started, phase: "aho" };
@@ -265,6 +286,16 @@ export class SqliteBotRepository implements BotRepository {
       const done = stepAhoBuild(job.aho, COMPACT_BUDGET_MS - elapsed());
       if (done && job.aho.machine !== null) {
         cache.machine = job.aho.machine;
+        job.base = {
+          kind: "chunked",
+          gen: job.rowGen,
+          rowCount: job.encode.rowCount,
+          chunkCount: KEYWORD_CHUNK_COUNT,
+          emptyAnchor: job.encode.hasEmptyAnchor,
+          lengths: job.encode.lengths,
+          loaded: new Map(),
+          rowIndex: new Map(),
+        };
         job.phase = "store";
         return { done: false, ms: performance.now() - started, phase: "store" };
       }
@@ -277,7 +308,7 @@ export class SqliteBotRepository implements BotRepository {
         return { done: !more, ms: performance.now() - started, phase: more ? "again" : "done" };
       }
     }
-    return { done: false, ms: performance.now() - started, phase: job.phase };
+    return { done: false, ms: performance.now() - started, phase: job.phase === "encode" ? `encode:${job.encode.phase}` : job.phase };
   }
 
   async measureKeywordWrite(sample: KeywordWriteSample): Promise<KeywordWriteMeasure> {
@@ -298,6 +329,7 @@ export class SqliteBotRepository implements BotRepository {
   async anchorLengths(): Promise<number[]> {
     if (!this.coldMode) return anchorLengthList(this.storage.sql);
     const cache = await this.readyCache(false);
+    await this.ensureAllChunks(cache.table);
     const lengths = new Set<number>();
     for (const row of snapshotRows(cache.table)) {
       if (row.anchor !== "") lengths.add([...row.anchor].length);
@@ -340,7 +372,7 @@ export class SqliteBotRepository implements BotRepository {
     const hits = message === "" ? [] : probeHits(cache, message);
     const scanMs = performance.now() - scanStart;
     const fetchStart = performance.now();
-    const rows = this.rowsFor(message, query, hits);
+    const rows = await this.rowsFor(message, query, hits);
     const fetchMs = performance.now() - fetchStart;
     const matchStart = performance.now();
     const selected = selectFromRows(rows, query);
@@ -386,11 +418,11 @@ export class SqliteBotRepository implements BotRepository {
     for (let i = 0; i < rounds; i += 1) {
       this.probeCache = null;
       this.compactJob = null;
-      const raw = await this.readRawCache();
-      const rowRaw = await this.readRawRows();
+      const meta = await this.readMeta();
+      const aho = meta === null ? null : await this.readAho(meta);
       const delta = await this.readDeltaOps();
       const decodeStart = performance.now();
-      this.installCache(raw, rowRaw, delta);
+      await this.installCache(meta, aho, delta);
       const decoded = performance.now();
       const rendered = await this.renderFromRows(query);
       requestMs.push(performance.now() - decodeStart);
@@ -436,11 +468,11 @@ export class SqliteBotRepository implements BotRepository {
     for (let i = 0; i < rounds; i += 1) {
       this.probeCache = null;
       this.compactJob = null;
-      const raw = await this.readRawCache();
-      const rowRaw = await this.readRawRows();
+      const meta = await this.readMeta();
+      const aho = meta === null ? null : await this.readAho(meta);
       const delta = await this.readDeltaOps();
       const decodeStart = performance.now();
-      this.installCache(raw, rowRaw, delta);
+      await this.installCache(meta, aho, delta);
       const decoded = performance.now();
       const result = await this.runSelect(query);
       requestMs.push(performance.now() - decodeStart);
@@ -463,7 +495,7 @@ export class SqliteBotRepository implements BotRepository {
     if (message === "") return selectFromRows([], query);
     const cache = await this.readyCache(false);
     const hits = probeHits(cache, message);
-    const rows = this.rowsFor(message, query, hits);
+    const rows = await this.rowsFor(message, query, hits);
     const selected = selectFromRows(rows, query);
     return { replies: selected.replies, candidates: rows.length };
   }
@@ -472,6 +504,7 @@ export class SqliteBotRepository implements BotRepository {
     const message = normalizeKeywordMessage(query.message, query.stripName);
     const cache = await this.readyCache(false);
     const hits = message === "" ? [] : probeHits(cache, message);
+    if (message !== "") await this.ensureChunksForQuery(cache.table, message, hits, query.allReply);
     const memory = message === "" ? [] : rowsForHits(cache.table, message, query, hits);
     const sql = message === "" ? [] : rowsForSelect(this.storage.sql, message, query, hits);
     return {
@@ -482,9 +515,11 @@ export class SqliteBotRepository implements BotRepository {
     };
   }
 
-  private rowsFor(message: string, query: KeywordSelect, hits: readonly string[]): KeywordRow[] {
+  private async rowsFor(message: string, query: KeywordSelect, hits: readonly string[]): Promise<KeywordRow[]> {
+    const cache = await this.readyCache(false);
+    await this.ensureChunksForQuery(cache.table, message, hits, query.allReply);
     this.rowsRead = 0;
-    return rowsForHits(this.probeCache?.table ?? emptyKeywordTable(), message, query, hits);
+    return rowsForHits(cache.table, message, query, hits);
   }
 
   private logicalKeyword(
@@ -528,42 +563,105 @@ export class SqliteBotRepository implements BotRepository {
 
   private async readyCache(_needAnchors: boolean): Promise<ProbeCache> {
     if (this.probeCache !== null) return this.probeCache;
-    const raw = await this.readRawCache();
-    const rowRaw = await this.readRawRows();
+    const meta = await this.readMeta();
+    const aho = meta === null ? null : await this.readAho(meta);
     const delta = await this.readDeltaOps();
-    return this.installCache(raw, rowRaw, delta);
+    return this.installCache(meta, aho, delta);
   }
 
-  private installCache(
-    raw: RawProbeCache | null,
-    rowRaw: RawProbeCache | null,
+  private async installCache(
+    meta: KeywordMeta | null,
+    aho: Uint8Array | null,
     delta: readonly RowDeltaOp[],
-  ): ProbeCache {
-    const machine = raw === null ? buildAho([]) : decodeAho(raw.bytes);
-    const base = rowRaw === null ? null : decodeKeywordTable(rowRaw.bytes);
+  ): Promise<ProbeCache> {
+    const machine = aho === null ? buildAho([]) : decodeAho(aho);
     let table: KeywordStore;
     const pending = new Set<string>();
-    if (base === null) {
+    if (meta === null) {
       const loaded = loadKeywordTable(this.storage.sql);
       table = loaded;
-      if (raw === null) {
-        for (const row of loaded.rows) {
-          if (row !== null && row.anchor !== "") pending.add(row.anchor);
-        }
+      for (const row of loaded.rows) {
+        if (row !== null && row.anchor !== "") pending.add(row.anchor);
       }
-    } else if (delta.length === 0) {
-      table = base;
+      this.cacheStats = {
+        buildMs: this.cacheStats.buildMs, bytes: 0, chunks: 0, anchors: 0, rowBytes: 0, rowChunks: 0,
+      };
     } else {
-      table = applyRowDelta(base, delta);
-      for (const op of delta) {
-        if (op.op === "put") {
-          const anchor = anchorOf(op.keyword);
-          if (anchor !== "") pending.add(anchor);
+      const base: ChunkedKeywordTable = {
+        kind: "chunked",
+        gen: meta.rowGen,
+        rowCount: meta.rowCount,
+        chunkCount: meta.rowChunks,
+        emptyAnchor: meta.emptyAnchor,
+        lengths: meta.lengths,
+        loaded: new Map(),
+        rowIndex: new Map(),
+      };
+      if (delta.length === 0) {
+        table = base;
+      } else {
+        await this.ensureChunks(base, delta.map((op) => anchorOf(op.keyword)));
+        table = applyRowDelta(base, delta);
+        for (const op of delta) {
+          if (op.op === "put") {
+            const anchor = anchorOf(op.keyword);
+            if (anchor !== "") pending.add(anchor);
+          }
         }
       }
+      this.cacheStats = {
+        buildMs: this.cacheStats.buildMs,
+        bytes: meta.ahoBytes,
+        chunks: meta.ahoChunks,
+        anchors: meta.anchors,
+        rowBytes: meta.rowBytes,
+        rowChunks: meta.rowChunks,
+      };
     }
-    this.probeCache = { machine, anchors: null, table, pending, deltaOps: delta.length };
+    this.probeCache = { machine, meta, table, pending, deltaOps: delta.length };
     return this.probeCache;
+  }
+
+  private async ensureChunksForAnchors(table: KeywordStore, anchors: Iterable<string>): Promise<void> {
+    const base = table.kind === "overlay" ? table.base : table;
+    if (base.kind === "chunked") await this.ensureChunks(base, anchors);
+  }
+
+  private async ensureChunksForQuery(
+    table: KeywordStore,
+    message: string,
+    hits: readonly string[],
+    allReply = false,
+  ): Promise<void> {
+    const anchors = [...hits];
+    if (message !== "" && !allReply) anchors.push(anchorOf(message));
+    await this.ensureChunksForAnchors(table, anchors);
+  }
+
+  private async ensureChunks(base: ChunkedKeywordTable, anchors: Iterable<string>): Promise<void> {
+    const ids = new Set<number>();
+    for (const anchor of anchors) {
+      if (anchor === "" && !base.emptyAnchor) continue;
+      ids.add(keywordChunk(anchor));
+    }
+    const missing = [...ids].filter((id) => !base.loaded.has(id));
+    await Promise.all(missing.map((id) => this.loadChunk(base, id)));
+  }
+
+  private async ensureAllChunks(table: KeywordStore): Promise<void> {
+    const base = table.kind === "overlay" ? table.base : table;
+    if (base.kind !== "chunked") return;
+    const missing: number[] = [];
+    for (let id = 0; id < base.chunkCount; id += 1) {
+      if (!base.loaded.has(id)) missing.push(id);
+    }
+    await Promise.all(missing.map((id) => this.loadChunk(base, id)));
+  }
+
+  private async loadChunk(base: ChunkedKeywordTable, id: number): Promise<void> {
+    const raw = asBytes(await this.storage.get(rowChunkKey(base.gen, id)));
+    if (raw === null) throw new TypeError("keyword row chunk was missing");
+    registerChunk(base, id, decodeKeywordTable(raw));
   }
 
   private needsCompact(cache: ProbeCache): boolean {
@@ -582,43 +680,53 @@ export class SqliteBotRepository implements BotRepository {
   private async beginCompact(): Promise<CompactJob> {
     const cache = this.probeCache;
     if (cache === null) throw new Error("probe cache is missing");
+    const oldMeta = await this.readMeta();
     return {
-      encode: startEncodeJob(cache.table),
+      encode: startChunkEncodeJob(cache.table),
       aho: null,
       anchors: [],
-      phase: "encode",
-      storeAt: 0,
-      storedRows: false,
+      phase: "load",
+      loadAt: 0,
+      base: null,
       deltaBase: metaChunkCount(await this.storage.get(DELTA_META_KEY)),
       deltaOpsAtStart: cache.deltaOps,
       deletedTo: 0,
-      ahoBytes: null as Uint8Array | null,
-      commitAt: 0,
-      rowDeletedTo: 0,
+      ahoBytes: null,
+      ahoParts: [],
+      ahoAt: 0,
+      rowAt: 0,
+      rowBytes: 0,
+      ahoGen: (oldMeta?.ahoGen ?? 0) + 1,
+      rowGen: (oldMeta?.rowGen ?? 0) + 1,
+      oldMeta,
       flipped: false,
-      oldAhoGen: 0,
-      oldAhoChunks: 0,
-      oldRowGen: 0,
-      oldRowChunks: 0,
+      oldDeletedTo: 0,
     };
   }
 
   private async storeCompactSlice(cache: ProbeCache, job: CompactJob, budgetMs: number): Promise<boolean> {
     const started = performance.now();
-    const bytes = job.encode.bytes;
     const machine = job.aho?.machine ?? null;
-    if (bytes === null || machine === null) throw new Error("compact store started early");
-    const rowMeta = parseMeta(await this.storage.get(ROW_META_KEY));
-    const nextGen = (rowMeta?.gen ?? 0) + 1;
-    if (!job.storedRows) {
-      const index = Math.floor(job.storeAt / this.rowSliceBytes);
-      const end = Math.min(bytes.byteLength, job.storeAt + this.rowSliceBytes);
-      const slice = bytes.slice(job.storeAt, end);
-      await this.storage.put(rowChunkKey(nextGen, index), slice.buffer);
-      job.storeAt = end;
-      if (job.storeAt < bytes.byteLength) return false;
-      job.storedRows = true;
-      job.storeAt = 0;
+    if (machine === null) throw new Error("compact store started early");
+    if (job.ahoBytes === null) {
+      job.ahoBytes = encodeAho(machine);
+      job.ahoParts = splitChunks(job.ahoBytes, this.rowSliceBytes);
+      return false;
+    }
+    if (job.ahoAt < job.ahoParts.length) {
+      const part = job.ahoParts[job.ahoAt] ?? new Uint8Array();
+      await this.storage.put(ahoChunkKey(job.ahoGen, job.ahoAt), part.buffer);
+      job.ahoAt += 1;
+      return false;
+    }
+    if (job.rowAt < KEYWORD_CHUNK_COUNT) {
+      const part = job.encode.bytes[job.rowAt] ?? encodeKeywordRows([], []);
+      await this.storage.put(rowChunkKey(job.rowGen, job.rowAt), part.buffer);
+      if (job.base === null) throw new Error("compact base was missing");
+      registerChunk(job.base, job.rowAt, decodeKeywordTable(part));
+      job.rowBytes += part.byteLength;
+      job.rowAt += 1;
+      return false;
     }
     if (job.deletedTo < job.deltaBase) {
       const end = Math.min(job.deltaBase, job.deletedTo + 2);
@@ -626,61 +734,55 @@ export class SqliteBotRepository implements BotRepository {
       job.deletedTo = end;
       if (job.deletedTo < job.deltaBase || performance.now() - started >= budgetMs) return false;
     }
-    if (job.ahoBytes === null) {
-      job.ahoBytes = encodeAho(machine);
-      return false;
-    }
-    const encoded = job.ahoBytes;
-    const ahoMeta = parseMeta(await this.storage.get(CACHE_META_KEY));
-    const ahoGen = (ahoMeta?.gen ?? 0) + 1;
-    const ahoParts = splitChunks(encoded, this.rowSliceBytes);
-    if (!job.flipped && job.commitAt < ahoParts.length) {
-      const chunk = ahoParts[job.commitAt] ?? new Uint8Array();
-      await this.storage.put(chunkKey(ahoGen, job.commitAt), chunk.buffer);
-      job.commitAt += 1;
-      return false;
-    }
-    const rowChunks = Math.ceil(bytes.byteLength / this.rowSliceBytes);
     if (!job.flipped) {
-      job.oldAhoGen = ahoMeta?.gen ?? 0;
-      job.oldAhoChunks = ahoMeta?.chunks ?? 0;
-      job.oldRowGen = rowMeta?.gen ?? 0;
-      job.oldRowChunks = rowMeta?.chunks ?? 0;
-      await this.storage.put(CACHE_META_KEY, {
-        chunks: ahoParts.length,
+      const meta: KeywordMeta = {
+        version: KEYWORD_CACHE_VERSION,
+        ahoGen: job.ahoGen,
+        ahoChunks: job.ahoParts.length,
+        ahoBytes: job.ahoBytes.byteLength,
+        rowGen: job.rowGen,
+        rowChunks: KEYWORD_CHUNK_COUNT,
+        rowBytes: job.rowBytes,
+        rowCount: job.encode.rowCount,
         anchors: job.anchors.length,
-        bytes: encoded.byteLength,
-        gen: ahoGen,
-      });
-      await this.storage.put(ROW_META_KEY, {
-        chunks: rowChunks,
-        anchors: 0,
-        bytes: bytes.byteLength,
-        gen: nextGen,
-      });
+        emptyAnchor: job.encode.hasEmptyAnchor,
+        lengths: job.encode.lengths,
+      };
+      await this.storage.put(KEYWORD_CACHE_META_KEY, meta);
       job.flipped = true;
+      cache.meta = meta;
       cache.deltaOps = Math.max(0, cache.deltaOps - job.deltaOpsAtStart);
       return false;
     }
-    if (job.rowDeletedTo < job.oldAhoChunks + job.oldRowChunks) {
-      const index = job.rowDeletedTo;
-      if (index < job.oldAhoChunks) await this.storage.delete(chunkKey(job.oldAhoGen, index));
-      else await this.storage.delete(rowChunkKey(job.oldRowGen, index - job.oldAhoChunks));
-      job.rowDeletedTo += 1;
+    const oldChunks = (job.oldMeta?.ahoChunks ?? 0) + (job.oldMeta?.rowChunks ?? 0);
+    if (job.oldDeletedTo < oldChunks) {
+      const index = job.oldDeletedTo;
+      const oldMeta = job.oldMeta;
+      if (oldMeta !== null) {
+        if (index < oldMeta.ahoChunks) await this.storage.delete(ahoChunkKey(oldMeta.ahoGen, index));
+        else await this.storage.delete(rowChunkKey(oldMeta.rowGen, index - oldMeta.ahoChunks));
+      }
+      job.oldDeletedTo += 1;
       return false;
     }
+    const base = job.base;
+    if (base === null) throw new Error("compact base was missing");
     const built = new Set(job.anchors);
     for (const anchor of cache.pending) {
       if (built.has(anchor)) cache.pending.delete(anchor);
     }
-    if (cache.table.kind !== "map") cache.table = decodeKeywordTable(bytes);
+    if (cache.deltaOps === 0) {
+      cache.table = base;
+    }
+    // With remaining deltas the old overlay already reflects every write;
+    // the next compaction folds them into a fresh base.
     this.cacheStats = {
       buildMs: this.cacheStats.buildMs,
-      bytes: encoded.byteLength,
-      chunks: ahoParts.length,
+      bytes: job.ahoBytes.byteLength,
+      chunks: job.ahoParts.length,
       anchors: job.anchors.length,
-      rowBytes: bytes.byteLength,
-      rowChunks: rowChunks,
+      rowBytes: job.rowBytes,
+      rowChunks: KEYWORD_CHUNK_COUNT,
     };
     return true;
   }
@@ -707,46 +809,35 @@ export class SqliteBotRepository implements BotRepository {
     return ops;
   }
 
-  private async readRawCache(): Promise<RawProbeCache | null> {
-    const meta = parseMeta(await this.storage.get(CACHE_META_KEY));
-    if (meta === null) return null;
-    const parts: Uint8Array[] = [];
-    for (let i = 0; i < meta.chunks; i += 1) {
-      const part = asBytes(await this.storage.get(chunkKey(meta.gen, i)));
-      if (part === null) return null;
-      parts.push(part);
-    }
-    const bytes = new Uint8Array(meta.bytes);
-    let at = 0;
-    for (const part of parts) {
-      bytes.set(part, at);
-      at += part.byteLength;
-    }
-    if (at !== meta.bytes) return null;
-    return { bytes, anchors: meta.anchors, stored: meta.bytes, chunks: meta.chunks };
+  private async readMeta(): Promise<KeywordMeta | null> {
+    return parseKeywordMeta(await this.storage.get(KEYWORD_CACHE_META_KEY));
   }
 
-  private async readRawRows(): Promise<RawProbeCache | null> {
-    const meta = parseMeta(await this.storage.get(ROW_META_KEY));
-    if (meta === null) return null;
+  private async readAho(meta: KeywordMeta): Promise<Uint8Array> {
     const parts: Uint8Array[] = [];
-    for (let i = 0; i < meta.chunks; i += 1) {
-      const part = asBytes(await this.storage.get(rowChunkKey(meta.gen, i)));
-      if (part === null) return null;
+    for (let i = 0; i < meta.ahoChunks; i += 1) {
+      const part = asBytes(await this.storage.get(ahoChunkKey(meta.ahoGen, i)));
+      if (part === null) throw new TypeError("keyword automaton chunk was missing");
       parts.push(part);
     }
-    const bytes = new Uint8Array(meta.bytes);
+    if (parts.length === 1) {
+      const only = parts[0] as Uint8Array;
+      if (only.byteLength !== meta.ahoBytes) throw new TypeError("keyword automaton size mismatch");
+      return only;
+    }
+    const bytes = new Uint8Array(meta.ahoBytes);
     let at = 0;
     for (const part of parts) {
       bytes.set(part, at);
       at += part.byteLength;
     }
-    if (at !== meta.bytes) return null;
-    return { bytes, anchors: 0, stored: meta.bytes, chunks: meta.chunks };
+    if (at !== meta.ahoBytes) throw new TypeError("keyword automaton size mismatch");
+    return bytes;
   }
 
   async upsertKeyword(input: KeywordWrite): Promise<KeywordWriteStatus> {
     const cache = await this.readyCache(false);
+    await this.ensureChunksForAnchors(cache.table, [anchorOf(input.keyword)]);
     const sqlRow = readKeywordRow(this.storage.sql, input.scopeId, input.keyword);
     const existing = this.logicalKeyword(cache, input.scopeId, input.keyword, sqlRow);
     let status: KeywordWriteStatus = "written";
@@ -801,6 +892,7 @@ export class SqliteBotRepository implements BotRepository {
 
   private async deleteStoredKeyword(input: KeywordDelete): Promise<KeywordDeleteStatus> {
     const cache = await this.readyCache(false);
+    await this.ensureChunksForAnchors(cache.table, [anchorOf(input.keyword)]);
     const sqlRow = readKeywordRow(this.storage.sql, input.scopeId, input.keyword);
     const existing = this.logicalKeyword(cache, input.scopeId, input.keyword, sqlRow);
     let status: KeywordDeleteStatus = "missing";
@@ -833,12 +925,14 @@ export class SqliteBotRepository implements BotRepository {
       return readKeywordRow(this.storage.sql, input.scopeId, input.keyword)?.reply ?? null;
     }
     const cache = await this.readyCache(false);
+    await this.ensureChunksForAnchors(cache.table, [anchorOf(input.keyword)]);
     return findKeywordRow(cache.table, input.scopeId, input.keyword)?.reply ?? null;
   }
 
   async listKeywords(scopeId: string | null): Promise<string[]> {
     if (this.coldMode) {
       const cache = await this.readyCache(false);
+      await this.ensureAllChunks(cache.table);
       return listKeywordTexts(cache.table, scopeId);
     }
     const scope = keywordScope(scopeId);
@@ -851,6 +945,7 @@ export class SqliteBotRepository implements BotRepository {
   async inspectKeywords(): Promise<KeywordSnapshot> {
     if (!this.coldMode) return readKeywords(this.storage.sql);
     const cache = await this.readyCache(false);
+    await this.ensureAllChunks(cache.table);
     const keywords: StoredKeyword[] = [];
     visitKeywordRows(cache.table, (row) => {
       keywords.push({
@@ -1137,30 +1232,46 @@ export interface KeywordAudit {
 
 interface ProbeCache {
   machine: AhoMachine;
-  anchors: Set<string> | null;
+  meta: KeywordMeta | null;
   table: KeywordStore;
   pending: Set<string>;
   deltaOps: number;
 }
 
+interface KeywordMeta {
+  version: 4;
+  ahoGen: number;
+  ahoChunks: number;
+  ahoBytes: number;
+  rowGen: number;
+  rowChunks: number;
+  rowBytes: number;
+  rowCount: number;
+  anchors: number;
+  emptyAnchor: boolean;
+  lengths: number[];
+}
+
 interface CompactJob {
-  encode: EncodeJob;
+  encode: ChunkEncodeJob;
   aho: AhoBuild | null;
   anchors: string[];
-  phase: "encode" | "aho" | "store";
-  storeAt: number;
-  storedRows: boolean;
+  phase: "load" | "encode" | "aho" | "store";
+  loadAt: number;
+  base: ChunkedKeywordTable | null;
   deltaBase: number;
   deltaOpsAtStart: number;
   deletedTo: number;
   ahoBytes: Uint8Array | null;
-  commitAt: number;
-  rowDeletedTo: number;
+  ahoParts: Uint8Array[];
+  ahoAt: number;
+  rowAt: number;
+  rowBytes: number;
+  ahoGen: number;
+  rowGen: number;
+  oldMeta: KeywordMeta | null;
   flipped: boolean;
-  oldAhoGen: number;
-  oldAhoChunks: number;
-  oldRowGen: number;
-  oldRowChunks: number;
+  oldDeletedTo: number;
 }
 
 export interface KeywordCompact {
@@ -1180,41 +1291,6 @@ export interface KeywordWriteSample {
 export interface KeywordWriteMeasure {
   cpuMs: number;
   loadMs: number;
-}
-
-interface RawProbeCache {
-  bytes: Uint8Array;
-  anchors: number;
-  stored: number;
-  chunks: number;
-}
-
-function addCachedAnchor(cache: ProbeCache, anchor: string): boolean {
-  const anchors = cache.anchors;
-  if (anchors === null || anchor === "" || anchors.has(anchor)) return false;
-  anchors.add(anchor);
-  return true;
-}
-
-function dropCachedAnchor(sql: SqlStorage, cache: ProbeCache, anchor: string): boolean {
-  const anchors = cache.anchors;
-  if (anchors === null || anchor === "" || !anchors.has(anchor)) return false;
-  const left = sql.exec(
-    "SELECT 1 AS n FROM user_keyword WHERE anchor = ? LIMIT 1",
-    anchor,
-  ).toArray()[0];
-  if (left !== undefined) return false;
-  anchors.delete(anchor);
-  return true;
-}
-
-function loadAnchors(sql: SqlStorage): Set<string> {
-  const anchors = new Set<string>();
-  for (const row of sqlRows(sql, "SELECT DISTINCT anchor FROM user_keyword")) {
-    const anchor = row.anchor;
-    if (typeof anchor === "string" && anchor !== "") anchors.add(anchor);
-  }
-  return anchors;
 }
 
 function rowsForSelect(
@@ -1249,31 +1325,38 @@ function asBytes(value: unknown): Uint8Array | null {
   return null;
 }
 
-function parseMeta(value: unknown): { chunks: number; anchors: number; bytes: number; gen: number } | null {
+function parseKeywordMeta(value: unknown): KeywordMeta | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  if (!("chunks" in value) || !("anchors" in value) || !("bytes" in value)) return null;
-  const chunks = value.chunks;
-  const anchors = value.anchors;
-  const bytes = value.bytes;
-  if (typeof chunks !== "number" || !Number.isInteger(chunks) || chunks < 0) return null;
-  if (typeof anchors !== "number" || !Number.isInteger(anchors) || anchors < 0) return null;
-  if (typeof bytes !== "number" || !Number.isInteger(bytes) || bytes < 0) return null;
-  const gen = "gen" in value && typeof value.gen === "number" && Number.isInteger(value.gen) && value.gen >= 0
-    ? value.gen
-    : 0;
-  return { chunks, anchors, bytes, gen };
+  const record = value as Record<string, unknown>;
+  if (record.version !== KEYWORD_CACHE_VERSION) return null;
+  const numbers = ["ahoGen", "ahoChunks", "ahoBytes", "rowGen", "rowChunks", "rowBytes", "rowCount", "anchors"];
+  for (const name of numbers) {
+    const field = record[name];
+    if (typeof field !== "number" || !Number.isInteger(field) || field < 0) return null;
+  }
+  const lengths = record.lengths;
+  if (!Array.isArray(lengths) || lengths.some((length) => typeof length !== "number" || !Number.isInteger(length) || length < 1)) {
+    return null;
+  }
+  return {
+    version: KEYWORD_CACHE_VERSION,
+    ahoGen: record.ahoGen as number,
+    ahoChunks: record.ahoChunks as number,
+    ahoBytes: record.ahoBytes as number,
+    rowGen: record.rowGen as number,
+    rowChunks: record.rowChunks as number,
+    rowBytes: record.rowBytes as number,
+    rowCount: record.rowCount as number,
+    anchors: record.anchors as number,
+    emptyAnchor: record.emptyAnchor === true,
+    lengths: lengths as number[],
+  };
 }
 
 function metaChunkCount(value: unknown): number {
-  return parseMeta(value)?.chunks ?? 0;
-}
-
-function chunkKey(gen: number, index: number): string {
-  return `keyword-probe-cache-${gen}-${index}`;
-}
-
-function rowChunkKey(gen: number, index: number): string {
-  return `keyword-row-cache-${gen}-${index}`;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return 0;
+  const chunks = (value as Record<string, unknown>).chunks;
+  return typeof chunks === "number" && Number.isInteger(chunks) && chunks >= 0 ? chunks : 0;
 }
 
 function deltaChunkKey(index: number): string {

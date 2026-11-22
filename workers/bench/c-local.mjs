@@ -1,16 +1,19 @@
 // Measures the local Worker through wrangler dev. No Cloudflare request is made.
-// Real blobs come from C_BLOB_DIR (default /tmp/c-blob-build-current); only aggregates print.
+// Real blobs come from C_BLOB_DIR (default /tmp/c-blob-build-v4); only aggregates print.
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { commonChars, commonWeights } from "./char-freq.ts";
 
 const PORT = Number(process.env.C_PORT ?? 8796);
-const BLOBS = process.env.C_BLOB_DIR ?? "/tmp/c-blob-build-current";
+const BLOBS = process.env.C_BLOB_DIR ?? "/tmp/c-blob-build-v4";
 const STATE = mkdtempSync(join(tmpdir(), "c-measure-state-"));
 const BASE = `http://127.0.0.1:${PORT}`;
 const SECRET = "bench";
+const NO_MATCH = "&".repeat(20);
+const LONG = weightedText(5000, 2);
 const files = readdirSync(BLOBS)
   .filter((name) => name !== "c-manifest.json")
   .map((name) => ({ name, size: statSync(join(BLOBS, name)).size }));
@@ -32,11 +35,15 @@ try {
   }
   const cold = [];
   const warm = [];
+  const longCold = [];
+  const longWarm = [];
   for (let i = 0; i < 3; i += 1) {
     await stop();
     child = await start();
-    cold.push(await measure("coldDm", () => callback(dm("Ubench-measure-user", "zz-no-match")), 500));
-    warm.push(await measure("warmDm", () => callback(dm("Ubench-measure-user", "zz-no-match")), 200));
+    cold.push(await measure("coldDm", () => callback(dm("Ubench-measure-user", NO_MATCH)), 500));
+    warm.push(await measure("warmDm", () => callback(dm("Ubench-measure-user", NO_MATCH)), 200));
+    longCold.push(await measure("longCold", () => callback(dm("Ubench-measure-user", LONG)), 500));
+    longWarm.push(await measure("longWarm", () => callback(dm("Ubench-measure-user", LONG)), 500));
   }
   console.log(
     "C_LOCAL",
@@ -47,6 +54,8 @@ try {
       max,
       cold,
       warm,
+      longCold,
+      longWarm,
     }),
   );
 } finally {
@@ -65,8 +74,8 @@ function check() {
 function pickMax() {
   const largest = (list) => [...list].sort((a, b) => b.size - a.size)[0] ?? null;
   return {
-    probe: largest(files.filter((f) => f.name.startsWith("keyword-probe-cache-1-"))),
-    row: largest(files.filter((f) => f.name.startsWith("keyword-row-cache-1-"))),
+    aho: largest(files.filter((f) => f.name.startsWith("keyword-aho-"))),
+    row: largest(files.filter((f) => f.name.startsWith("keyword-rows-"))),
     log: largest(files.filter((f) => f.name.startsWith("c-logs:"))),
     group: largest(files.filter((f) => f.name.startsWith("c-group:"))),
   };
@@ -187,9 +196,39 @@ function dm(userId, text) {
     deliveryContext: { isRedelivery: false },
     timestamp: 0,
     source: { type: "user", userId },
-    replyToken: "00000000000000000000000000000000",
     mode: "active",
   };
+}
+
+function weightedText(length, seed) {
+  const total = commonWeights.reduce((sum, weight) => sum + weight, 0);
+  const cumulative = [];
+  let acc = 0;
+  for (const weight of commonWeights) {
+    acc += weight;
+    cumulative.push(acc);
+  }
+  let state = seed;
+  const random = () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), 1 | t);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  let text = "zzsentinel";
+  while (text.length < length) {
+    const unit = random() * total;
+    let lo = 0;
+    let hi = cumulative.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cumulative[mid] <= unit) lo = mid + 1;
+      else hi = mid;
+    }
+    text += commonChars[lo] ?? "";
+  }
+  return text.slice(0, length);
 }
 
 function sleep(ms) {

@@ -2,20 +2,22 @@ import { buildAho, decodeAho, encodeAho } from "./aho";
 import {
   decodeKeywordTable,
   emptyKeywordTable,
-  encodeKeywordTable,
-  snapshotRows,
+  encodeKeywordRows,
+  KEYWORD_CHUNK_COUNT,
+  startChunkEncodeJob,
+  stepChunkEncodeJob,
   upsertKeywordRow,
 } from "./keyword-rows";
 
 export const COLD_BOT_STATE = "global-c";
 export const BLOB_CHUNK_BYTES = 1_300_000;
 export const BLOB_VALUE_LIMIT = 8 * 1024 * 1024;
-export const KEYWORD_BLOB_KEY_LIMIT = 16;
+export const KEYWORD_BLOB_KEY_LIMIT = 128;
+export const KEYWORD_CACHE_META_KEY = "keyword-cache-meta";
 const LOG_BLOB_LIMIT = 16;
 const LOG_PART_BYTES = 1_000_000;
 
-const KEYWORD_META_AHO = "keyword-probe-cache-meta";
-const KEYWORD_META_ROWS = "keyword-row-cache-meta";
+export const KEYWORD_CACHE_VERSION = 4;
 
 export interface GroupBlobUser {
   uid: string;
@@ -98,43 +100,61 @@ export function keywordBlobEntries(
 ): BlobPut[] {
   const table = emptyKeywordTable();
   for (const row of rows) upsertKeywordRow(table, row);
-  const anchors: string[] = [];
-  const seen = new Set<string>();
-  for (const row of table.rows) {
-    if (row === null || row.anchor === "" || seen.has(row.anchor)) continue;
-    seen.add(row.anchor);
-    anchors.push(row.anchor);
+  const job = startChunkEncodeJob(table);
+  while (!stepChunkEncodeJob(job, 1e9)) {
+    // one full encode
   }
-  const aho = encodeAho(buildAho(anchors));
-  const packed = encodeKeywordTable(table);
+  const aho = encodeAho(buildAho(job.anchors));
   const ahoParts = splitBytes(aho);
-  const rowParts = splitBytes(packed);
-  const entries: BlobPut[] = [
-    {
-      key: KEYWORD_META_AHO,
-      json: { chunks: ahoParts.length, anchors: anchors.length, bytes: aho.byteLength, gen: 1 },
-    },
-  ];
+  const entries: BlobPut[] = [];
   ahoParts.forEach((part, index) => {
-    entries.push({ key: `keyword-probe-cache-1-${index}`, bytes: part });
+    entries.push({ key: ahoChunkKey(1, index), bytes: part });
   });
+  let rowBytes = 0;
+  for (let index = 0; index < KEYWORD_CHUNK_COUNT; index += 1) {
+    const part = job.bytes[index] ?? encodeKeywordRows([], []);
+    rowBytes += part.byteLength;
+    entries.push({ key: rowChunkKey(1, index), bytes: part });
+  }
   entries.push({
-    key: KEYWORD_META_ROWS,
-    json: { chunks: rowParts.length, anchors: 0, bytes: packed.byteLength, gen: 1 },
+    key: KEYWORD_CACHE_META_KEY,
+    json: {
+      version: KEYWORD_CACHE_VERSION,
+      ahoGen: 1,
+      ahoChunks: ahoParts.length,
+      ahoBytes: aho.byteLength,
+      rowGen: 1,
+      rowChunks: KEYWORD_CHUNK_COUNT,
+      rowBytes,
+      rowCount: job.rowCount,
+      anchors: job.anchors.length,
+      emptyAnchor: job.hasEmptyAnchor,
+      lengths: job.lengths,
+    },
   });
-  rowParts.forEach((part, index) => {
-    entries.push({ key: `keyword-row-cache-1-${index}`, bytes: part });
-  });
-  if (entries.length > KEYWORD_BLOB_KEY_LIMIT) throw new Error("keyword blob exceeds 16 keys");
+  if (entries.length > KEYWORD_BLOB_KEY_LIMIT) throw new Error("keyword blob exceeds key limit");
   return entries;
 }
 
 export function keywordBlobsRoundTrip(entries: readonly BlobPut[]): number {
-  const aho = concatParts(entries, "keyword-probe-cache-1-");
-  const rows = concatParts(entries, "keyword-row-cache-1-");
-  const machine = decodeAho(aho);
-  const table = decodeKeywordTable(rows);
-  return machine.chars.length + snapshotRows(table).length;
+  const meta = entries.find((entry) => entry.key === KEYWORD_CACHE_META_KEY)?.json;
+  if (meta === null || typeof meta !== "object" || Array.isArray(meta)) {
+    throw new TypeError("keyword meta was missing");
+  }
+  const record = meta as Record<string, unknown>;
+  const ahoChunks = record.ahoChunks;
+  const rowChunks = record.rowChunks;
+  if (typeof ahoChunks !== "number" || typeof rowChunks !== "number") {
+    throw new TypeError("keyword meta was invalid");
+  }
+  const machine = decodeAho(concatParts(entries, ahoChunkKey(1, 0).slice(0, -1)));
+  let rows = 0;
+  for (let index = 0; index < rowChunks; index += 1) {
+    const part = entries.find((entry) => entry.key === rowChunkKey(1, index))?.bytes;
+    if (part === undefined) throw new TypeError("keyword row chunk was missing");
+    rows += decodeKeywordTable(part).rowCount;
+  }
+  return machine.chars.length + rows;
 }
 
 export function splitLogBlobs(rows: readonly LogRow[]): LogRow[][] {
@@ -162,9 +182,9 @@ export function splitLogBlobs(rows: readonly LogRow[]): LogRow[][] {
 }
 
 export function assertBlobKey(key: string): void {
-  if (key === KEYWORD_META_AHO || key === KEYWORD_META_ROWS || key === "c-manifest") return;
-  if (/^keyword-probe-cache-1-\d+$/.test(key)) return;
-  if (/^keyword-row-cache-1-\d+$/.test(key)) return;
+  if (key === KEYWORD_CACHE_META_KEY || key === "c-manifest") return;
+  if (/^keyword-aho-\d+-\d+$/.test(key)) return;
+  if (/^keyword-rows-\d+-\d+$/.test(key)) return;
   if (/^c-group:[A-Za-z0-9]{1,64}$/.test(key)) return;
   if (/^c-user:[0-9a-f]{2}$/.test(key)) return;
   if (/^c-logs:\d{1,2}$/.test(key)) return;
@@ -223,6 +243,14 @@ function splitBytes(bytes: Uint8Array): Uint8Array[] {
     parts.push(bytes.slice(i, Math.min(bytes.byteLength, i + BLOB_CHUNK_BYTES)));
   }
   return parts;
+}
+
+export function ahoChunkKey(gen: number, index: number): string {
+  return `keyword-aho-${gen}-${index}`;
+}
+
+export function rowChunkKey(gen: number, index: number): string {
+  return `keyword-rows-${gen}-${index}`;
 }
 
 function concatParts(entries: readonly BlobPut[], prefix: string): Uint8Array {

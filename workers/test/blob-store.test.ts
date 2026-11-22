@@ -46,13 +46,13 @@ describe("blob import", () => {
     );
   });
 
-  it("round-trips keyword blobs with the probe codec and keeps the key count within 16", () => {
+  it("round-trips keyword blobs with the probe codec and stays within the key limit", () => {
     const rows = [];
     for (let i = 0; i < 20; i += 1) {
       rows.push({ id: "G", keyword: `anchor${i}word`, reply: `reply${i}` });
     }
     const entries = keywordBlobEntries(rows);
-    expect(entries.length).toBeLessThanOrEqual(16);
+    expect(entries.length).toBeLessThanOrEqual(128);
     expect(keywordBlobsRoundTrip(entries)).toBeGreaterThan(0);
     expect(userShardIndex("U1")).toBe(userShardIndex("U1"));
     expect(userShardIndex("U1")).toBeGreaterThanOrEqual(0);

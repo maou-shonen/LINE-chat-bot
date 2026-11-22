@@ -98,7 +98,7 @@ describe("build blobs", () => {
     assert.equal(summary.settingsDm, 1);
     assert.equal(summary.settingsSkipped, 1);
     assert.equal(summary.logKeys, 1);
-    assert.ok(summary.keywordKeys <= 16);
+    assert.ok(summary.keywordKeys <= 128);
     assert.equal(uploads.length, summary.puts);
     const printed = lines.join("\n");
     for (const secret of ["Usecret", "Nsecret", "Gsecret", "Ksecret", "Rsecret"]) {
