@@ -295,6 +295,8 @@ function i32(values: Int32Array): Uint8Array {
 }
 
 function takeU32(bytes: Uint8Array, offset: number, length: number): Uint32Array {
+  const at = bytes.byteOffset + offset;
+  if (at % 4 === 0) return new Uint32Array(bytes.buffer, at, length);
   const out = new Uint32Array(length);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (let i = 0; i < length; i += 1) out[i] = view.getUint32(offset + i * 4, true);
@@ -302,6 +304,8 @@ function takeU32(bytes: Uint8Array, offset: number, length: number): Uint32Array
 }
 
 function takeI32(bytes: Uint8Array, offset: number, length: number): Int32Array {
+  const at = bytes.byteOffset + offset;
+  if (at % 4 === 0) return new Int32Array(bytes.buffer, at, length);
   const out = new Int32Array(length);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (let i = 0; i < length; i += 1) out[i] = view.getInt32(offset + i * 4, true);
@@ -309,6 +313,8 @@ function takeI32(bytes: Uint8Array, offset: number, length: number): Int32Array 
 }
 
 function takeU16(bytes: Uint8Array, offset: number, length: number): Uint16Array {
+  const at = bytes.byteOffset + offset;
+  if (at % 2 === 0) return new Uint16Array(bytes.buffer, at, length);
   const out = new Uint16Array(length);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (let i = 0; i < length; i += 1) out[i] = view.getUint16(offset + i * 2, true);

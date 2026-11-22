@@ -27,16 +27,49 @@ export interface RowDeltaOp {
   reply: string;
 }
 
+export interface ChunkedKeywordTable {
+  kind: "chunked";
+  gen: number;
+  rowCount: number;
+  chunkCount: number;
+  emptyAnchor: boolean;
+  lengths: number[];
+  loaded: Map<number, StoredKeywordTable>;
+  rowIndex: Map<number, number>;
+}
+
+export type BaseKeywordTable = StoredKeywordTable | ChunkedKeywordTable;
+
 export interface OverlayKeywordTable {
   kind: "overlay";
-  base: StoredKeywordTable;
+  base: BaseKeywordTable;
   deleted: Set<number>;
   replaced: Map<number, KeywordRow>;
   appended: Array<KeywordRow | null>;
   keyIndex: Map<string, number>;
 }
 
-export type KeywordStore = KeywordTable | StoredKeywordTable | OverlayKeywordTable;
+export type KeywordStore = KeywordTable | StoredKeywordTable | ChunkedKeywordTable | OverlayKeywordTable;
+
+export const KEYWORD_CHUNK_BITS = 3;
+export const KEYWORD_CHUNK_COUNT = 1 << KEYWORD_CHUNK_BITS;
+
+export function keywordChunk(anchor: string): number {
+  return hashText(anchor) >>> (32 - KEYWORD_CHUNK_BITS);
+}
+
+export function registerChunk(
+  base: ChunkedKeywordTable,
+  id: number,
+  chunk: StoredKeywordTable,
+): void {
+  if (base.loaded.has(id)) return;
+  base.loaded.set(id, chunk);
+  for (let local = 0; local < chunk.rowCount; local += 1) {
+    const ordinal = chunk.rowMeta[local * ROW_STRIDE + ROW_ORDINAL] ?? local;
+    base.rowIndex.set(ordinal, (id << CHUNK_LOCAL_SHIFT) | local);
+  }
+}
 
 export function emptyKeywordTable(): KeywordTable {
   return { kind: "map", rows: [], byAnchor: new Map(), byKeyword: new Map(), byId: new Map() };
@@ -86,6 +119,7 @@ export function rowsForHits(
   hits: readonly string[],
 ): KeywordRow[] {
   if (table.kind === "stored") return storedRows(table, message, query, hits);
+  if (table.kind === "chunked") return chunkedRows(table, message, query, hits);
   if (table.kind === "overlay") return overlayRows(table, message, query, hits);
   if (message !== "" && !query.allReply) {
     for (const index of lists(table.byKeyword, message)) {
@@ -109,15 +143,6 @@ export function rowsForHits(
   return rows;
 }
 
-export function materializeKeywordTable(table: StoredKeywordTable): KeywordTable {
-  const map = emptyKeywordTable();
-  for (let i = 0; i < table.rowCount; i += 1) {
-    const row = readStoredRow(table, i);
-    upsertKeywordRow(map, row);
-  }
-  return map;
-}
-
 export function listKeywordTexts(table: KeywordStore, scopeId: string | null): string[] {
   const wanted = scopeId ?? "";
   const out: string[] = [];
@@ -133,6 +158,12 @@ export function listKeywordTexts(table: KeywordStore, scopeId: string | null): s
     }
     return out;
   }
+  if (table.kind === "chunked") {
+    for (let i = 0; i < table.rowCount; i += 1) {
+      if (baseIdIs(table, i, wanted)) out.push(baseField(table, i, 2));
+    }
+    return out;
+  }
   for (let i = 0; i < table.base.rowCount; i += 1) {
     if (table.deleted.has(i)) continue;
     const replaced = table.replaced.get(i);
@@ -140,7 +171,7 @@ export function listKeywordTexts(table: KeywordStore, scopeId: string | null): s
       if ((replaced.id ?? "") === wanted) out.push(replaced.keyword);
       continue;
     }
-    if (storedIdIs(table.base, i, wanted)) out.push(storedField(table.base, i, 2));
+    if (baseIdIs(table.base, i, wanted)) out.push(baseField(table.base, i, 2));
   }
   for (const row of table.appended) {
     if (row !== null && (row.id ?? "") === wanted) out.push(row.keyword);
@@ -157,6 +188,10 @@ export function visitKeywordRows(table: KeywordStore, visit: (row: KeywordRow) =
   }
   if (table.kind === "stored") {
     for (let i = 0; i < table.rowCount; i += 1) visit(readStoredRow(table, i));
+    return;
+  }
+  if (table.kind === "chunked") {
+    for (let i = 0; i < table.rowCount; i += 1) visit(baseReadRow(table, i));
     return;
   }
   const count = table.base.rowCount + table.appended.length;
@@ -188,15 +223,15 @@ export function findKeywordRow(
     const index = table.byId.get(scopeId ?? "")?.get(keyword);
     return index === undefined ? null : table.rows[index] ?? null;
   }
-  if (table.kind === "stored") {
+  if (table.kind === "stored" || table.kind === "chunked") {
     const index = findBaseRow(table, scopeId ?? "", keyword);
-    return index === null ? null : readStoredRow(table, index);
+    return index === null ? null : baseReadRow(table, index);
   }
   const known = table.keyIndex.get(`${scopeId ?? ""}\0${keyword}`);
   if (known !== undefined) return readOverlayRow(table, known);
   const index = findBaseRow(table.base, scopeId ?? "", keyword);
   if (index === null || table.deleted.has(index)) return null;
-  return table.replaced.get(index) ?? readStoredRow(table.base, index);
+  return table.replaced.get(index) ?? baseReadRow(table.base, index);
 }
 
 export function encodeKeywordTable(table: KeywordTable): Uint8Array {
@@ -204,6 +239,15 @@ export function encodeKeywordTable(table: KeywordTable): Uint8Array {
   for (const row of table.rows) {
     if (row !== null) live.push(row);
   }
+  const ordinals = live.map((_, index) => index);
+  return encodeKeywordRows(live, ordinals);
+}
+
+export function encodeKeywordRows(
+  live: readonly KeywordRow[],
+  ordinals: readonly number[],
+): Uint8Array {
+  if (live.length !== ordinals.length) throw new TypeError("keyword ordinal count mismatch");
   const grouped = new Map<string, number[]>();
   for (let i = 0; i < live.length; i += 1) {
     const anchor = live[i]?.anchor ?? "";
@@ -230,7 +274,7 @@ export function encodeKeywordTable(table: KeywordTable): Uint8Array {
   const rowBytes = live.length * ROW_STRIDE * 4;
   const bytes = new Uint8Array(header + groupBytes + keywordBytes + poolBytes + rowBytes + chars * 2);
   const view = new DataView(bytes.buffer);
-  view.setUint32(0, 3, true);
+  view.setUint32(0, 4, true);
   view.setUint32(4, groups.length, true);
   view.setUint32(8, live.length, true);
   view.setUint32(12, poolCount, true);
@@ -276,6 +320,7 @@ export function encodeKeywordTable(table: KeywordTable): Uint8Array {
     view.setUint32(rowStart + i * ROW_STRIDE * 4 + 24, at, true);
     view.setUint32(rowStart + i * ROW_STRIDE * 4 + 28, row.author === null ? NULL_ID : row.author.length, true);
     if (row.author !== null) at = writeUnits(units, at, row.author);
+    view.setUint32(rowStart + i * ROW_STRIDE * 4 + 32, ordinals[i] ?? i, true);
   }
   let groupCursor = header;
   for (const group of groups) {
@@ -288,8 +333,8 @@ export function encodeKeywordTable(table: KeywordTable): Uint8Array {
 export function decodeKeywordTable(bytes: Uint8Array): StoredKeywordTable {
   if (bytes.byteOffset % 4 !== 0) throw new TypeError("keyword row blob was misaligned");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (bytes.byteLength < 20 || view.getUint32(0, true) !== 3) {
-    throw new TypeError("keyword row blob was not version 3");
+  if (bytes.byteLength < 20 || view.getUint32(0, true) !== 4) {
+    throw new TypeError("keyword row blob was not version 4");
   }
   const groupCount = view.getUint32(4, true);
   const rowCount = view.getUint32(8, true);
@@ -317,8 +362,11 @@ export function decodeKeywordTable(bytes: Uint8Array): StoredKeywordTable {
 }
 
 const GROUP_STRIDE = 5;
-const ROW_STRIDE = 8;
+const ROW_STRIDE = 9;
+const ROW_ORDINAL = 8;
 const NULL_ID = 0xffffffff;
+const CHUNK_LOCAL_SHIFT = 20;
+const CHUNK_LOCAL_MASK = (1 << CHUNK_LOCAL_SHIFT) - 1;
 
 function storedRows(
   table: StoredKeywordTable,
@@ -423,6 +471,92 @@ function readStoredRow(table: StoredKeywordTable, index: number): KeywordRow {
   };
 }
 
+function chunkedRows(
+  table: ChunkedKeywordTable,
+  message: string,
+  query: KeywordSelect,
+  hits: readonly string[],
+): KeywordRow[] {
+  if (message !== "" && !query.allReply) {
+    for (const index of baseKeywordIndexes(table, message)) {
+      const row = baseReadRow(table, index);
+      if (!rowPasses(row, query)) continue;
+      return [row];
+    }
+  }
+  if (hits.length === 0) return [];
+  const found: number[] = [];
+  for (const hit of hits) found.push(...baseGroupRows(table, hit));
+  found.sort((left, right) => left - right);
+  const rows: KeywordRow[] = [];
+  for (const index of found) {
+    const row = baseReadRow(table, index);
+    if (query.scopeId !== null && row.id !== query.scopeId) continue;
+    rows.push(row);
+  }
+  return rows;
+}
+
+function chunkRowOrdinal(chunk: StoredKeywordTable, local: number): number {
+  return chunk.rowMeta[local * ROW_STRIDE + ROW_ORDINAL] ?? local;
+}
+
+function baseReadRow(base: BaseKeywordTable, index: number): KeywordRow {
+  if (base.kind === "stored") return readStoredRow(base, index);
+  const packed = base.rowIndex.get(index);
+  if (packed === undefined) throw new Error("keyword chunk was not loaded");
+  const chunk = base.loaded.get(packed >>> CHUNK_LOCAL_SHIFT);
+  if (chunk === undefined) throw new Error("keyword chunk was not loaded");
+  return readStoredRow(chunk, packed & CHUNK_LOCAL_MASK);
+}
+
+function baseIdIs(base: BaseKeywordTable, index: number, id: string): boolean {
+  if (base.kind === "stored") return storedIdIs(base, index, id);
+  const packed = base.rowIndex.get(index);
+  if (packed === undefined) throw new Error("keyword chunk was not loaded");
+  const chunk = base.loaded.get(packed >>> CHUNK_LOCAL_SHIFT);
+  if (chunk === undefined) throw new Error("keyword chunk was not loaded");
+  return storedIdIs(chunk, packed & CHUNK_LOCAL_MASK, id);
+}
+
+function baseField(base: BaseKeywordTable, index: number, slot: number): string {
+  if (base.kind === "stored") return storedField(base, index, slot);
+  const packed = base.rowIndex.get(index);
+  if (packed === undefined) throw new Error("keyword chunk was not loaded");
+  const chunk = base.loaded.get(packed >>> CHUNK_LOCAL_SHIFT);
+  if (chunk === undefined) throw new Error("keyword chunk was not loaded");
+  return storedField(chunk, packed & CHUNK_LOCAL_MASK, slot);
+}
+
+function baseGroupRows(base: BaseKeywordTable, anchor: string): number[] {
+  if (base.kind === "stored") {
+    const group = findGroup(base, anchor);
+    if (group === null) return [];
+    const rows: number[] = [];
+    for (let i = group.begin; i < group.end; i += 1) rows.push(base.pool[i] ?? 0);
+    return rows;
+  }
+  if (anchor === "" && !base.emptyAnchor) return [];
+  const chunk = base.loaded.get(keywordChunk(anchor));
+  if (chunk === undefined) throw new Error("keyword chunk was not loaded");
+  const group = findGroup(chunk, anchor);
+  if (group === null) return [];
+  const rows: number[] = [];
+  for (let i = group.begin; i < group.end; i += 1) {
+    rows.push(chunkRowOrdinal(chunk, chunk.pool[i] ?? 0));
+  }
+  return rows;
+}
+
+function baseKeywordIndexes(base: BaseKeywordTable, keyword: string): number[] {
+  if (base.kind === "stored") return keywordIndexes(base, keyword);
+  const anchor = anchorOf(keyword);
+  if (anchor === "" && !base.emptyAnchor) return [];
+  const chunk = base.loaded.get(keywordChunk(anchor));
+  if (chunk === undefined) throw new Error("keyword chunk was not loaded");
+  return keywordIndexes(chunk, keyword).map((local) => chunkRowOrdinal(chunk, local));
+}
+
 function idBucket(table: KeywordTable, id: string): Map<string, number> {
   let bucket = table.byId.get(id);
   if (bucket === undefined) {
@@ -450,7 +584,7 @@ function lists(index: Map<string, number[]>, key: string): readonly number[] {
   return index.get(key) ?? [];
 }
 
-export function applyRowDelta(base: StoredKeywordTable, ops: readonly RowDeltaOp[]): OverlayKeywordTable {
+export function applyRowDelta(base: BaseKeywordTable, ops: readonly RowDeltaOp[]): OverlayKeywordTable {
   const table = emptyOverlay(base);
   for (const op of ops) applyOverlayOp(table, op);
   return table;
@@ -473,7 +607,7 @@ export function applyOverlayOp(table: OverlayKeywordTable, op: RowDeltaOp): void
     keyword: op.keyword,
     reply: op.reply,
     anchor: anchorOf(op.keyword),
-    author: index !== null && index < table.base.rowCount ? readStoredRow(table.base, index).author : null,
+    author: index !== null && index < table.base.rowCount ? baseReadRow(table.base, index).author : null,
   };
   if (index === null) {
     const at = table.base.rowCount + table.appended.length;
@@ -496,6 +630,11 @@ export function snapshotRows(table: KeywordStore): KeywordRow[] {
     return rows;
   }
   if (table.kind === "stored") return storedSnapshot(table);
+  if (table.kind === "chunked") {
+    const rows: KeywordRow[] = [];
+    for (let i = 0; i < table.rowCount; i += 1) rows.push(baseReadRow(table, i));
+    return rows;
+  }
   const rows: KeywordRow[] = [];
   const count = table.base.rowCount + table.appended.length;
   for (let i = 0; i < count; i += 1) {
@@ -515,211 +654,241 @@ export function emptyStoredKeywordTable(): StoredKeywordTable {
   return decodeKeywordTable(encodeKeywordTable(emptyKeywordTable()));
 }
 
-interface EncodeGroup {
-  anchor: string;
-  hash: number;
-  rows: number[];
-}
-
-export interface EncodeJob {
-  source: KeywordStore;
-  live: KeywordRow[];
-  groups: EncodeGroup[];
-  keywords: Array<{ hash: number; index: number }>;
-  groupBuckets: EncodeGroup[][];
-  keywordBuckets: Array<Array<{ hash: number; index: number }>>;
-  anchorLists: Map<string, number[]>;
-  bytes: Uint8Array | null;
-  phase: "bucket" | "flatten" | "header" | "fill" | "done";
-  cursor: number;
+interface ChunkSlot {
+  rows: KeywordRow[];
+  ordinals: number[];
+  groups: Map<string, number[]>;
   chars: number;
+  bytes: Uint8Array | null;
+  view: DataView | null;
+  units: Uint16Array | null;
+  rowStart: number;
+  poolStart: number;
   at: number;
-  poolAt: number;
-  anchorAt: Map<string, number>;
+  fillAt: number;
+  keywords: Array<{ hash: number; index: number }> | null;
 }
 
-const BUCKETS = 256;
+export interface ChunkEncodeJob {
+  source: KeywordStore;
+  phase: "scan" | "alloc" | "fill" | "sort" | "done";
+  cursor: number;
+  total: number;
+  chunks: ChunkSlot[];
+  bytes: Array<Uint8Array | null>;
+  anchors: string[];
+  lengths: number[];
+  anchorSeen: Set<string>;
+  lengthSeen: Set<number>;
+  hasEmptyAnchor: boolean;
+  rowCount: number;
+  rowBytes: number;
+}
 
-export function startEncodeJob(source: KeywordStore): EncodeJob {
+export function startChunkEncodeJob(source: KeywordStore): ChunkEncodeJob {
   return {
     source,
-    live: [],
-    groups: [],
-    keywords: [],
-    groupBuckets: Array.from({ length: BUCKETS }, () => []),
-    keywordBuckets: Array.from({ length: BUCKETS }, () => []),
-    anchorLists: new Map(),
-    bytes: null,
-    phase: "bucket",
+    phase: "scan",
     cursor: 0,
-    chars: 0,
-    at: 0,
-    poolAt: 0,
-    anchorAt: new Map(),
+    total: storeSize(source),
+    chunks: Array.from({ length: KEYWORD_CHUNK_COUNT }, () => ({
+      rows: [],
+      ordinals: [],
+      groups: new Map(),
+      chars: 0,
+      bytes: null,
+      view: null,
+      units: null,
+      rowStart: 0,
+      poolStart: 0,
+      at: 0,
+      fillAt: 0,
+      keywords: null,
+    })),
+    bytes: Array.from({ length: KEYWORD_CHUNK_COUNT }, () => null),
+    anchors: [],
+    lengths: [],
+    anchorSeen: new Set(),
+    lengthSeen: new Set(),
+    hasEmptyAnchor: false,
+    rowCount: 0,
+    rowBytes: 0,
   };
 }
 
-export function stepEncodeJob(job: EncodeJob, budgetMs: number): boolean {
+export function stepChunkEncodeJob(job: ChunkEncodeJob, budgetMs: number): boolean {
   const start = performance.now();
-  if (job.phase === "bucket") bucketRows(job, start, budgetMs);
-  if (job.phase === "flatten" && performance.now() - start < budgetMs) flattenBuckets(job, start, budgetMs);
-  if (job.phase === "header" && performance.now() - start < budgetMs) writeHeader(job, start, budgetMs);
-  if (job.phase === "fill" && job.bytes !== null && performance.now() - start < budgetMs) {
-    fillEncodedRows(job, start, budgetMs);
-  }
+  if (job.phase === "scan") scanChunkRows(job, start, budgetMs);
+  if (job.phase === "alloc" && performance.now() - start < budgetMs) allocChunks(job, start, budgetMs);
+  if (job.phase === "fill" && performance.now() - start < budgetMs) fillChunks(job, start, budgetMs);
+  if (job.phase === "sort" && performance.now() - start < budgetMs) sortChunks(job, start, budgetMs);
   return job.phase === "done";
 }
 
-function bucketRows(job: EncodeJob, start: number, budgetMs: number): void {
-  const total = storeSize(job.source);
-  while (job.cursor < total && performance.now() - start < budgetMs) {
+function scanChunkRows(job: ChunkEncodeJob, start: number, budgetMs: number): void {
+  while (job.cursor < job.total && performance.now() - start < budgetMs) {
     const row = rowAt(job.source, job.cursor);
     job.cursor += 1;
     if (row === null) continue;
-    const index = job.live.length;
-    job.live.push(row);
-    const anchor = row.anchor;
-    let listed = job.anchorLists.get(anchor);
-    if (listed === undefined) {
-      listed = [];
-      job.anchorLists.set(anchor, listed);
-      const hash = hashText(anchor);
-      job.groupBuckets[hash >>> 24]?.push({ anchor, hash, rows: listed });
+    const slot = job.chunks[keywordChunk(row.anchor)];
+    if (slot === undefined) throw new Error("keyword chunk index was out of range");
+    if (slot.rows.length >= CHUNK_LOCAL_MASK) throw new Error("keyword chunk was too large");
+    const local = slot.rows.length;
+    slot.rows.push(row);
+    slot.ordinals.push(job.rowCount);
+    slot.chars += (row.id?.length ?? 0) + row.keyword.length + row.reply.length + (row.author?.length ?? 0);
+    const group = slot.groups.get(row.anchor);
+    if (group === undefined) slot.groups.set(row.anchor, [local]);
+    else group.push(local);
+    job.rowCount += 1;
+    if (row.anchor !== "") {
+      job.anchorSeen.add(row.anchor);
+      job.lengthSeen.add([...row.anchor].length);
+    } else {
+      job.hasEmptyAnchor = true;
     }
-    listed.push(index);
-    const keywordHash = hashText(row.keyword);
-    job.keywordBuckets[keywordHash >>> 24]?.push({ hash: keywordHash, index });
-    job.chars += (row.id?.length ?? 0) + row.keyword.length + row.reply.length + (row.author?.length ?? 0);
   }
-  if (job.cursor < total) return;
+  if (job.cursor < job.total) return;
+  job.anchors = [...job.anchorSeen];
+  job.lengths = [...job.lengthSeen].sort((left, right) => left - right);
+  job.anchorSeen.clear();
+  job.lengthSeen.clear();
   job.cursor = 0;
-  job.phase = "flatten";
+  job.phase = "alloc";
+}
+
+function allocChunks(job: ChunkEncodeJob, start: number, budgetMs: number): void {
+  while (job.cursor < KEYWORD_CHUNK_COUNT && performance.now() - start < budgetMs) {
+    const slot = job.chunks[job.cursor];
+    job.cursor += 1;
+    if (slot === undefined || slot.rows.length === 0) continue;
+    const header = 20;
+    const groupBytes = slot.groups.size * GROUP_STRIDE * 4;
+    const keywordBytes = slot.rows.length * 8;
+    const poolBytes = slot.rows.length * 4;
+    const rowBytes = slot.rows.length * ROW_STRIDE * 4;
+    const bytes = new Uint8Array(header + groupBytes + keywordBytes + poolBytes + rowBytes + slot.chars * 2);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, 4, true);
+    view.setUint32(4, slot.groups.size, true);
+    view.setUint32(8, slot.rows.length, true);
+    view.setUint32(12, slot.rows.length, true);
+    view.setUint32(16, slot.chars, true);
+    slot.bytes = bytes;
+    slot.view = view;
+    slot.poolStart = header + groupBytes + keywordBytes;
+    slot.rowStart = slot.poolStart + poolBytes;
+    slot.units = new Uint16Array(bytes.buffer, slot.rowStart + rowBytes, slot.chars);
+    slot.keywords = new Array(slot.rows.length);
+  }
+  if (job.cursor < KEYWORD_CHUNK_COUNT) return;
+  job.cursor = 0;
+  job.phase = "fill";
+}
+
+function fillChunks(job: ChunkEncodeJob, start: number, budgetMs: number): void {
+  while (job.cursor < KEYWORD_CHUNK_COUNT && performance.now() - start < budgetMs) {
+    const slot = job.chunks[job.cursor];
+    if (slot === undefined || slot.rows.length === 0) {
+      job.cursor += 1;
+      continue;
+    }
+    const view = slot.view;
+    const units = slot.units;
+    const keywords = slot.keywords;
+    if (view === null || units === null || keywords === null) throw new Error("keyword chunk was not allocated");
+    while (slot.fillAt < slot.rows.length && performance.now() - start < budgetMs) {
+      const local = slot.fillAt;
+      const row = slot.rows[local] as KeywordRow;
+      const id = row.id ?? "";
+      view.setUint32(slot.rowStart + local * ROW_STRIDE * 4, slot.at, true);
+      view.setUint32(slot.rowStart + local * ROW_STRIDE * 4 + 4, row.id === null ? NULL_ID : id.length, true);
+      slot.at = writeUnits(units, slot.at, id);
+      view.setUint32(slot.rowStart + local * ROW_STRIDE * 4 + 8, slot.at, true);
+      view.setUint32(slot.rowStart + local * ROW_STRIDE * 4 + 12, row.keyword.length, true);
+      slot.at = writeUnits(units, slot.at, row.keyword);
+      view.setUint32(slot.rowStart + local * ROW_STRIDE * 4 + 16, slot.at, true);
+      view.setUint32(slot.rowStart + local * ROW_STRIDE * 4 + 20, row.reply.length, true);
+      slot.at = writeUnits(units, slot.at, row.reply);
+      view.setUint32(slot.rowStart + local * ROW_STRIDE * 4 + 24, slot.at, true);
+      view.setUint32(slot.rowStart + local * ROW_STRIDE * 4 + 28, row.author === null ? NULL_ID : row.author.length, true);
+      if (row.author !== null) slot.at = writeUnits(units, slot.at, row.author);
+      view.setUint32(slot.rowStart + local * ROW_STRIDE * 4 + 32, slot.ordinals[local] ?? local, true);
+      keywords[local] = { hash: hashText(row.keyword), index: local };
+      slot.fillAt += 1;
+    }
+    if (slot.fillAt < slot.rows.length) return;
+    job.cursor += 1;
+  }
+  if (job.cursor < KEYWORD_CHUNK_COUNT) return;
+  job.cursor = 0;
+  job.phase = "sort";
+}
+
+function sortChunks(job: ChunkEncodeJob, start: number, budgetMs: number): void {
+  while (job.cursor < KEYWORD_CHUNK_COUNT && performance.now() - start < budgetMs) {
+    const index = job.cursor;
+    const slot = job.chunks[index];
+    job.cursor += 1;
+    if (slot === undefined || slot.bytes === null || slot.view === null) continue;
+    const view = slot.view;
+    const groups = [...slot.groups.entries()].map(([anchor, rows]) => ({
+      anchor,
+      hash: hashText(anchor),
+      rows,
+    }));
+    groups.sort((left, right) => cmpHash(left.hash, right.hash) || cmpText(left.anchor, right.anchor));
+    let poolAt = 0;
+    for (let at = 0; at < groups.length; at += 1) {
+      const group = groups[at] as (typeof groups)[number];
+      const cursor = 20 + at * GROUP_STRIDE * 4;
+      const first = group.rows[0] as number;
+      const keywordAt = view.getUint32(slot.rowStart + first * ROW_STRIDE * 4 + 8, true);
+      const row = slot.rows[first] as KeywordRow;
+      view.setUint32(cursor, group.hash, true);
+      view.setUint32(cursor + 4, keywordAt + row.keyword.indexOf(group.anchor), true);
+      view.setUint32(cursor + 8, group.anchor.length, true);
+      view.setUint32(cursor + 12, poolAt, true);
+      view.setUint32(cursor + 16, poolAt + group.rows.length, true);
+      for (const local of group.rows) {
+        view.setUint32(slot.poolStart + poolAt * 4, local, true);
+        poolAt += 1;
+      }
+    }
+    const keywords = slot.keywords;
+    if (keywords === null) throw new Error("keyword chunk keywords were missing");
+    keywords.sort((left, right) => cmpHash(left.hash, right.hash) || left.index - right.index);
+    const keywordStart = 20 + groups.length * GROUP_STRIDE * 4;
+    for (let at = 0; at < keywords.length; at += 1) {
+      const item = keywords[at] as (typeof keywords)[number];
+      view.setUint32(keywordStart + at * 8, item.hash, true);
+      view.setUint32(keywordStart + at * 8 + 4, item.index, true);
+    }
+    job.bytes[index] = slot.bytes;
+    job.rowBytes += slot.bytes.byteLength;
+    slot.rows = [];
+    slot.groups = new Map();
+    slot.keywords = null;
+    slot.units = null;
+  }
+  if (job.cursor < KEYWORD_CHUNK_COUNT) return;
+  job.phase = "done";
 }
 
 function storeSize(table: KeywordStore): number {
   if (table.kind === "map") return table.rows.length;
-  if (table.kind === "stored") return table.rowCount;
+  if (table.kind === "stored" || table.kind === "chunked") return table.rowCount;
   return table.base.rowCount + table.appended.length;
 }
 
 function rowAt(table: KeywordStore, index: number): KeywordRow | null {
   if (table.kind === "map") return table.rows[index] ?? null;
   if (table.kind === "stored") return readStoredRow(table, index);
+  if (table.kind === "chunked") return baseReadRow(table, index);
   return readOverlayRow(table, index);
 }
 
-function flattenBuckets(job: EncodeJob, start: number, budgetMs: number): void {
-  while (job.cursor < BUCKETS && performance.now() - start < budgetMs) {
-    const groups = job.groupBuckets[job.cursor] ?? [];
-    groups.sort((left, right) => cmpHash(left.hash, right.hash) || cmpText(left.anchor, right.anchor));
-    for (const group of groups) job.groups.push(group);
-    const keywords = job.keywordBuckets[job.cursor] ?? [];
-    keywords.sort((left, right) => cmpHash(left.hash, right.hash) || left.index - right.index);
-    for (const item of keywords) job.keywords.push(item);
-    job.cursor += 1;
-  }
-  if (job.cursor < BUCKETS) return;
-  const header = 20;
-  const groupBytes = job.groups.length * GROUP_STRIDE * 4;
-  const keywordBytes = job.live.length * 8;
-  const poolBytes = job.live.length * 4;
-  const rowBytes = job.live.length * ROW_STRIDE * 4;
-  job.bytes = new Uint8Array(header + groupBytes + keywordBytes + poolBytes + rowBytes + job.chars * 2);
-  const view = new DataView(job.bytes.buffer);
-  view.setUint32(0, 3, true);
-  view.setUint32(4, job.groups.length, true);
-  view.setUint32(8, job.live.length, true);
-  view.setUint32(12, job.live.length, true);
-  view.setUint32(16, job.chars, true);
-  job.cursor = 0;
-  job.poolAt = 0;
-  job.phase = "header";
-}
-
-function writeHeader(job: EncodeJob, start: number, budgetMs: number): void {
-  const bytes = job.bytes;
-  if (bytes === null) return;
-  const view = new DataView(bytes.buffer);
-  const header = 20;
-  const groupBytes = job.groups.length * GROUP_STRIDE * 4;
-  const keywordBytes = job.live.length * 8;
-  const poolStart = header + groupBytes + keywordBytes;
-  while (job.cursor < job.groups.length && performance.now() - start < budgetMs) {
-    const group = job.groups[job.cursor];
-    job.cursor += 1;
-    if (group === undefined) continue;
-    const cursor = header + (job.cursor - 1) * GROUP_STRIDE * 4;
-    view.setUint32(cursor, group.hash, true);
-    view.setUint32(cursor + 8, group.anchor.length, true);
-    view.setUint32(cursor + 12, job.poolAt, true);
-    view.setUint32(cursor + 16, job.poolAt + group.rows.length, true);
-    for (const index of group.rows) {
-      view.setUint32(poolStart + job.poolAt * 4, index, true);
-      job.poolAt += 1;
-    }
-  }
-  if (job.cursor < job.groups.length) return;
-  let keywordCursor = job.cursor - job.groups.length;
-  while (keywordCursor < job.keywords.length && performance.now() - start < budgetMs) {
-    const item = job.keywords[keywordCursor];
-    if (item !== undefined) {
-      const cursor = header + groupBytes + keywordCursor * 8;
-      view.setUint32(cursor, item.hash, true);
-      view.setUint32(cursor + 4, item.index, true);
-    }
-    keywordCursor += 1;
-    job.cursor += 1;
-  }
-  if (keywordCursor < job.keywords.length) return;
-  job.cursor = 0;
-  job.at = 0;
-  job.phase = "fill";
-}
-
-function fillEncodedRows(job: EncodeJob, start: number, budgetMs: number): void {
-  const bytes = job.bytes;
-  if (bytes === null) return;
-  const view = new DataView(bytes.buffer);
-  const header = 20;
-  const groupBytes = job.groups.length * GROUP_STRIDE * 4;
-  const keywordBytes = job.live.length * 8;
-  const poolBytes = job.live.length * 4;
-  const rowBytes = job.live.length * ROW_STRIDE * 4;
-  const units = new Uint16Array(bytes.buffer, header + groupBytes + keywordBytes + poolBytes + rowBytes);
-  const rowStart = header + groupBytes + keywordBytes + poolBytes;
-  while (job.cursor < job.live.length && performance.now() - start < budgetMs) {
-    const row = job.live[job.cursor];
-    const index = job.cursor;
-    job.cursor += 1;
-    if (row === undefined) continue;
-    const id = row.id ?? "";
-    view.setUint32(rowStart + index * ROW_STRIDE * 4, job.at, true);
-    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 4, row.id === null ? NULL_ID : id.length, true);
-    job.at = writeUnits(units, job.at, id);
-    const keywordAt = job.at;
-    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 8, job.at, true);
-    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 12, row.keyword.length, true);
-    job.at = writeUnits(units, job.at, row.keyword);
-    if (!job.anchorAt.has(row.anchor)) {
-      job.anchorAt.set(row.anchor, keywordAt + row.keyword.indexOf(row.anchor));
-    }
-    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 16, job.at, true);
-    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 20, row.reply.length, true);
-    job.at = writeUnits(units, job.at, row.reply);
-    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 24, job.at, true);
-    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 28, row.author === null ? NULL_ID : row.author.length, true);
-    if (row.author !== null) job.at = writeUnits(units, job.at, row.author);
-  }
-  if (job.cursor < job.live.length) return;
-  let groupCursor = header;
-  for (const group of job.groups) {
-    view.setUint32(groupCursor + 4, job.anchorAt.get(group.anchor) ?? 0, true);
-    groupCursor += GROUP_STRIDE * 4;
-  }
-  job.phase = "done";
-}
-
-function emptyOverlay(base: StoredKeywordTable): OverlayKeywordTable {
+function emptyOverlay(base: BaseKeywordTable): OverlayKeywordTable {
   return {
     kind: "overlay",
     base,
@@ -730,9 +899,9 @@ function emptyOverlay(base: StoredKeywordTable): OverlayKeywordTable {
   };
 }
 
-function findBaseRow(base: StoredKeywordTable, id: string, keyword: string): number | null {
-  for (const index of keywordIndexes(base, keyword)) {
-    const row = readStoredRow(base, index);
+function findBaseRow(base: BaseKeywordTable, id: string, keyword: string): number | null {
+  for (const index of baseKeywordIndexes(base, keyword)) {
+    const row = baseReadRow(base, index);
     if ((row.id ?? "") === id) return index;
   }
   return null;
@@ -746,7 +915,7 @@ function overlayRows(
 ): KeywordRow[] {
   if (message !== "" && !query.allReply) {
     const indexes = [
-      ...keywordIndexes(table.base, message),
+      ...baseKeywordIndexes(table.base, message),
       ...appendedIndexes(table, (row) => row.keyword === message),
     ].sort((left, right) => left - right);
     for (const index of indexes) {
@@ -758,11 +927,7 @@ function overlayRows(
   if (hits.length === 0) return [];
   const wanted = new Set(hits);
   const found: number[] = [];
-  for (const hit of hits) {
-    const group = findGroup(table.base, hit);
-    if (group === null) continue;
-    for (let i = group.begin; i < group.end; i += 1) found.push(table.base.pool[i] ?? 0);
-  }
+  for (const hit of hits) found.push(...baseGroupRows(table.base, hit));
   found.push(...appendedIndexes(table, (row) => wanted.has(row.anchor)));
   found.sort((left, right) => left - right);
   const rows: KeywordRow[] = [];
@@ -790,7 +955,7 @@ function readOverlayRow(table: OverlayKeywordTable, index: number): KeywordRow |
   if (table.deleted.has(index)) return null;
   const replaced = table.replaced.get(index);
   if (replaced !== undefined) return replaced;
-  if (index < table.base.rowCount) return readStoredRow(table.base, index);
+  if (index < table.base.rowCount) return baseReadRow(table.base, index);
   return table.appended[index - table.base.rowCount] ?? null;
 }
 
@@ -802,9 +967,9 @@ function writeUnits(units: Uint16Array, at: number, text: string): number {
 function sliceText(units: Uint16Array, at: number, length: number): string {
   if (length === 0) return "";
   let text = "";
-  for (let i = 0; i < length; i += 1024) {
-    const end = Math.min(length, i + 1024);
-    text += String.fromCharCode(...units.subarray(at + i, at + end));
+  for (let i = 0; i < length; i += 4096) {
+    const end = Math.min(length, i + 4096);
+    text += String.fromCharCode.apply(null, units.subarray(at + i, at + end) as unknown as number[]);
   }
   return text;
 }

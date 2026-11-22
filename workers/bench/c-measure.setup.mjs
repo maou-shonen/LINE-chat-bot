@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const PORT = 8797;
-const DIR = process.env.C_BLOB_DIR ?? "/tmp/c-blob-build-current";
+const DIR = process.env.C_BLOB_DIR ?? "/tmp/c-blob-build-v4";
 const SNAPSHOT =
   process.env.C_SNAPSHOT ?? join(homedir(), "linebot-import/line-snapshot-20261121.db");
 
@@ -14,7 +14,7 @@ export default async function setup() {
     .map((name) => ({ name, size: statSync(join(DIR, name)).size }))
     .filter((file) => file.name !== "c-manifest.json");
   const bySize = (list) => [...list].sort((a, b) => b.size - a.size)[0] ?? null;
-  const keyword = files.filter((f) => /^keyword-(probe|row)-cache-.*\.(bin|json)$/.test(f.name));
+  const keyword = files.filter((f) => /^keyword-(aho|rows)-(.*)\.bin$/.test(f.name));
   const logs = files.filter((f) => /^c-logs:\d+\.json$/.test(f.name));
   const groups = files.filter((f) => /^c-group:[A-Za-z0-9]+\.json$/.test(f.name));
 
@@ -31,8 +31,8 @@ export default async function setup() {
     keywordBytes: keyword.reduce((sum, f) => sum + f.size, 0),
     largestGroup: { members: Number(top.n), file: file?.name ?? null, size: file?.size ?? 0 },
     max: {
-      probe: bySize(keyword.filter((f) => f.name.startsWith("keyword-probe"))),
-      row: bySize(keyword.filter((f) => f.name.startsWith("keyword-row"))),
+      aho: bySize(keyword.filter((f) => f.name.startsWith("keyword-aho"))),
+      row: bySize(keyword.filter((f) => f.name.startsWith("keyword-rows"))),
       log: bySize(logs),
       group: bySize(groups),
     },

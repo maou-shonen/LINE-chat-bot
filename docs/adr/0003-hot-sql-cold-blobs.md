@@ -151,8 +151,8 @@
 | 匯入 | 約 4,700 rows，**不到 1 天**（約一天額度的 5%）〔估算，依 1.3 實測〕 |
 | 日常寫入 | 同 A，加上 hydration 的一次性寫入 |
 | 日常讀取 | 比 A 少，SQL 表只有熱資料 |
-| 10 ms 風險 | 低。冷啟動 `get` 15.9 MB 關鍵字 blob 的 workerd process CPU 是 50–60 ms，那是本機第一請求含 isolate 啟動；同一請求的 wall 是 44–48 ms。解碼只是掛上 view，2–4 ms。hydration 最大群組（659 人）第一則 wall 2–3 ms，8 個 alarm 步驟合計 15–20 ms，SQL rows written 2,664〔實測〕。最大的幾個群組要分批，用 alarm 續做 |
-| 記憶體 | 冷啟動 15.9 MB blob 後，workerd process RSS 增加 42.8–44.0 MB〔實測〕，128 MB 上限〔官方〕內 |
+| 10 ms 風險 | 低（v4，見 §4）。冷啟動只讀 automaton 與 meta，第一則私訊 process CPU 0–20 ms（10 ms 解析度）；5000 字暖路徑 p95 4 ms。冷啟動後第一則若是 5000 字且命中大量 anchor，仍要讀完 14.8 MB row chunk，p95 24 ms。hydration 最大群組（659 人）第一則 wall 2–3 ms，8 個 alarm 步驟合計 15–20 ms，SQL rows written 2,664〔實測〕。最大的幾個群組要分批，用 alarm 續做 |
+| 記憶體 | v4 冷啟動第一則 process RSS 增加 7.0–11.4 MB〔實測〕，128 MB 上限〔官方〕內 |
 | 回滾 | 簡單。沒被碰過的 blob 和 NAS 原資料一樣，只要匯出 SQL 熱表（切換後才建立或改過的列）加上關鍵字 overlay |
 | 改動量 | 中到大。要做：離線建置與上傳工具、repository 的 hydration 層、關鍵字指令改讀 blob、新的匯入端點（寫 KV）。dispatch 和 fixture 不用動 |
 
@@ -252,3 +252,21 @@
 - rows read/written 是 SQLite cursor 計數，和計費基礎一致；KV `get` 的列數另計（冷啟動 16 個）。
 - 上傳的 550 MB RSS 是 4,717 個請求的瞬時峰值，不是常駐。
 - 還沒量：台北 08:00 後 workers.dev 的實際 rows written 與 GraphQL CPU；D1 與 DO 是否共用 100k 寫入額度；R2 啟用狀態。
+
+### v4：lazy row chunk（2026-11-22 晚，取代上表）
+
+ v3 的冷啟動一次 `get` 15.9 MB（automaton 1.29 MB 加 row table 14.6 MB），process CPU 50–60 ms、RSS +43 MB。v4 把 row table 拆成 8 個依 anchor hash 分區、可獨立解碼的 chunk，冷啟動只讀 meta、automaton、delta meta 三個 key；命中才平行讀需要的 chunk，並在記憶體快取。長訊息則把 UTF-16 取字串改成 `String.fromCharCode.apply` 分塊、`anchorOf` 與 `keywordLevel` 去掉展開配置、`matchKeyword` 不再對每個候選做 `replaceAll`。compaction 改成掃描、配置、填入、排序四段，每段有 1 ms 預算，最後一次換 meta。
+
+| 項目 | v4 | v3 |
+|---|---|---|
+| 關鍵字 blob | 10 個 key，16,077,526 bytes（meta 361 bytes 另計）；8 個 row chunk，最大 1,987,892 bytes | 15 個 key，15,873,772 bytes |
+| 冷啟動 `get` | 3（meta、aho、delta meta） | 16 |
+| 冷啟動 decode | 0 ms | 2–4 ms |
+| 冷啟動第一則私訊 | wall 14.5–17.7 ms；process CPU 0–20 ms；RSS +7.0–11.4 MB | wall 43.9–48.1 ms；CPU 50–60 ms；RSS +42.8–44.0 MB |
+| 5000 字真實語料，暖 | p50 3 ms、p95 4 ms；scan 1、fetch 2、match 1 ms | 約 30 ms（Cloudflare，扣冷啟動） |
+| 5000 字真實語料，冷 | p50 18 ms、p95 24 ms（讀完 8 個 chunk、14.8 MB） | 未量 |
+| compaction 單段 | 最大 3 ms（偶發 13 ms wall 尖峰），50,929 列約 280–293 段 | 最大 3 ms |
+| 上傳 | 4,712 個 blob key、50,968,114 bytes；build 的 puts 是 4,713（含 manifest），只重傳有變動的 11 個 put | 4,718 個 put |
+
+限制：workerd 的 process CPU 解析度是 10 ms，冷啟動 0–20 ms 只能說接近或低於 10 ms；冷啟動後第一則若本身就是 5000 字且命中大量 anchor，仍需讀完所有 row chunk，這是 lazy chunk 的資料量下限。完整表格與重跑指令見 `workers/bench/RESULTS.md` 的「Option C v4」。
+

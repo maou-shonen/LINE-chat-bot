@@ -4,6 +4,7 @@ import { it } from "vitest";
 import { COLD_BOT_STATE, groupBlobKey } from "../src/blob-store";
 import type { BotState } from "../src/bot-state";
 import type { KeywordSelect } from "../src/keywords";
+import { commonChars, commonWeights } from "./char-freq";
 
 const BASE = "http://127.0.0.1:8797";
 const NOW = "2024-01-02 03:04:05";
@@ -21,7 +22,7 @@ interface Index {
     files: number;
     keywordBytes: number;
     largestGroup: { members: number; file: string | null; size: number };
-    max: { probe: BlobFile | null; row: BlobFile | null; log: BlobFile | null; group: BlobFile | null };
+    max: { aho: BlobFile | null; row: BlobFile | null; log: BlobFile | null; group: BlobFile | null };
   };
 }
 
@@ -35,15 +36,22 @@ it("measures option C against real blobs", async () => {
   await putKeywordBlobs(stub, keywordFiles);
   await spyGets(stub);
   const coldWall = performance.now();
-  const cold = await stub.measureColdRequest(query("zz-no-match"), 3);
+  const cold = await stub.measureColdRequest(query("&".repeat(20)), 3);
   const coldWallMs = performance.now() - coldWall;
   const coldGets = await readGets(stub);
 
+  const longText = weightedText(5000, 2);
+  const longQuery = query(longText);
+  await stub.measureKeywordSelect(longQuery, 1);
+  const longProfile = await stub.profileKeywordSelect(longQuery);
+  const longWarm = await stub.measureKeywordSelect(longQuery, 21);
+  const longCold = await stub.measureColdRequest(longQuery, 21);
+
   await installMeter(stub);
-  const dmCold = await timed(() => stub.recordMessage(dm("Ubench-dm", "zz-no-match"), NOW));
+  const dmCold = await timed(() => stub.recordMessage(dm("Ubench-dm", "&".repeat(20)), NOW));
   const dmColdRows = await readMeter(stub);
   await resetMeter(stub);
-  const dmWarm = await timed(() => stub.recordMessage(dm("Ubench-dm", "zz-no-match"), NOW));
+  const dmWarm = await timed(() => stub.recordMessage(dm("Ubench-dm", "&".repeat(20)), NOW));
   const dmWarmRows = await readMeter(stub);
 
   const uploads: Record<string, { wallMs: number; status: number }> = {};
@@ -71,7 +79,7 @@ it("measures option C against real blobs", async () => {
       new Response("{}", { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
   });
 
-  const hydrate = await timed(() => stub.recordMessage(groupText(group.id, speaker, "zz-no-match"), NOW));
+  const hydrate = await timed(() => stub.recordMessage(groupText(group.id, speaker, "&".repeat(20)), NOW));
   let alarmMaxMs = 0;
   let alarmTotalMs = 0;
   let steps = 0;
@@ -89,7 +97,7 @@ it("measures option C against real blobs", async () => {
   }
   const hydrateRows = await readMeter(stub);
   await resetMeter(stub);
-  const follow = await timed(() => stub.recordMessage(groupText(group.id, speaker, "zz-no-match"), NOW));
+  const follow = await timed(() => stub.recordMessage(groupText(group.id, speaker, "&".repeat(20)), NOW));
   const followRows = await readMeter(stub);
 
   await stub.upsertKeyword({
@@ -115,6 +123,17 @@ it("measures option C against real blobs", async () => {
         wallMs: round(coldWallMs),
         hitsPerRound: coldGets / 3,
       },
+      long: {
+        chars: longText.length,
+        candidates: longProfile.candidates,
+        profile: {
+          scanMs: round(longProfile.scanMs),
+          fetchMs: round(longProfile.fetchMs),
+          matchMs: round(longProfile.matchMs),
+        },
+        warm: summary(longWarm.samplesMs),
+        cold: { decodeMs: summary(longCold.decodeMs), requestMs: summary(longCold.requestMs) },
+      },
       dm: { coldMs: round(dmCold.ms), coldRows: dmColdRows, warmMs: round(dmWarm.ms), warmRows: dmWarmRows },
       upload: uploads,
       hydrate: {
@@ -133,8 +152,52 @@ it("measures option C against real blobs", async () => {
   );
 });
 
-function query(message: string): KeywordSelect {
-  return { message, scopeId: null, allReply: true, excludeUrl: false, stripName: false, rng: [{ op: "choice", index: 0 }] };
+function query(message: string, rng: KeywordSelect["rng"] = [{ op: "choice", index: 0 }]): KeywordSelect {
+  return { message, scopeId: null, allReply: true, excludeUrl: false, stripName: false, rng };
+}
+
+function summary(values: readonly number[]) {
+  const sorted = [...values].sort((left, right) => left - right);
+  return {
+    p50: round(rank(sorted, 0.5)),
+    p95: round(rank(sorted, 0.95)),
+    max: round(sorted[sorted.length - 1] ?? Number.NaN),
+  };
+}
+
+function rank(sorted: readonly number[], p: number): number {
+  return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)] ?? Number.NaN;
+}
+
+function weightedText(length: number, seed: number): string {
+  const total = commonWeights.reduce((sum, weight) => sum + weight, 0);
+  const cumulative: number[] = [];
+  let acc = 0;
+  for (const weight of commonWeights) {
+    acc += weight;
+    cumulative.push(acc);
+  }
+  let state = seed;
+  const random = () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), 1 | t);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  let text = "zzsentinel";
+  while (text.length < length) {
+    const unit = random() * total;
+    let lo = 0;
+    let hi = cumulative.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((cumulative[mid] ?? 0) <= unit) lo = mid + 1;
+      else hi = mid;
+    }
+    text += commonChars[lo] ?? "";
+  }
+  return text.slice(0, length);
 }
 
 function dm(userId: string, message: string) {

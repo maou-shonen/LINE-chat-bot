@@ -44,16 +44,32 @@ export interface KeywordSelectResult {
 }
 
 export function anchorOf(keyword: string): string {
+  if (keyword.indexOf("**") === -1) return keyword;
   let best = "";
   let bestLen = 0;
   for (const piece of keyword.split("**")) {
-    const len = [...piece].length;
+    const len = codePointLength(piece);
     if (len > bestLen) {
       best = piece;
       bestLen = len;
     }
   }
   return best;
+}
+
+export function codePointLength(text: string): number {
+  let length = text.length;
+  for (let i = 0; i < text.length - 1; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const low = text.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        length -= 1;
+        i += 1;
+      }
+    }
+  }
+  return length;
 }
 
 export function excludeKeywordUrls(
@@ -181,9 +197,9 @@ export function matchKeyword(
     if (row.keyword === message) {
       if (flags.allReply) exact.push(reply);
       else return reply;
-    } else if (row.keyword.replaceAll("**", "") === message) {
+    } else if (row.keyword.includes("**") && row.keyword.replaceAll("**", "") === message) {
       exact.push(reply);
-    } else if (!flags.allReply || [...reply].length > 1) {
+    } else if (!flags.allReply || codePointLength(reply) > 1) {
       keys.push([row.keyword, reply]);
     }
   }
@@ -258,14 +274,21 @@ function drawCount(message: string): number {
 }
 
 function keywordLevel(keyword: string): number {
-  return [...keyword].length
+  return codePointLength(keyword)
     - (keyword.split("**").length - 1)
     - (keyword.startsWith("**") ? 2 : 0)
     - (keyword.endsWith("**") ? 2 : 0);
 }
 
 function wildcardMatch(keyword: string, message: string): boolean {
+  if (keyword.indexOf("**") === -1) {
+    if (keyword === "") return true;
+    if (message.indexOf(keyword) === -1) return false;
+    return message[0] === keyword[0] && message[message.length - 1] === keyword[keyword.length - 1];
+  }
   const pieces = keyword.split("**");
+  const first = pieces[0] ?? "";
+  const last = pieces[pieces.length - 1] ?? "";
   let kn = -1;
   for (const piece of pieces) {
     if (piece !== "") {
@@ -274,8 +297,6 @@ function wildcardMatch(keyword: string, message: string): boolean {
       else return false;
     }
     // Python rechecks the pin on every piece, including empty ones.
-    const first = pieces[0] ?? "";
-    const last = pieces[pieces.length - 1] ?? "";
     if (first !== "" && message[0] !== keyword[0]) return false;
     if (last !== "" && message[message.length - 1] !== keyword[keyword.length - 1]) return false;
   }
