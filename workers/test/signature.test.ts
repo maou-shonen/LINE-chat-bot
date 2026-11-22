@@ -2,6 +2,7 @@ import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test"
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import worker from "../src";
+import { COLD_BOT_STATE } from "../src/blob-store";
 
 const SECRET = "test-channel-secret";
 const BODY = '{"events":[]}';
@@ -46,6 +47,7 @@ describe("LINE signature gate", () => {
       release = resolve;
     });
     let started = false;
+    let objectName = "";
     const ctx = createExecutionContext();
     let waited: Promise<unknown> | undefined;
     const waitUntil = ctx.waitUntil.bind(ctx);
@@ -57,19 +59,25 @@ describe("LINE signature gate", () => {
     try {
       const response = await worker.fetch(
         callbackRequest(`/callback/${secret}/${token}`, BODY, await sign(secret, BODY)),
-        envWith({
-          fetch: async (request) => {
-            started = true;
-            expect(new URL(request.url).pathname).toBe(`/callback/${secret}/${token}`);
-            expect(await request.text()).toBe(BODY);
-            return gate;
+        envWith(
+          {
+            fetch: async (request) => {
+              started = true;
+              expect(new URL(request.url).pathname).toBe(`/callback/${secret}/${token}`);
+              expect(await request.text()).toBe(BODY);
+              return gate;
+            },
           },
-        }),
+          (name) => {
+            objectName = name;
+          },
+        ),
         ctx,
       );
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("ok");
       expect(started).toBe(true);
+      expect(objectName).toBe(COLD_BOT_STATE);
       expect(waited).toBeDefined();
       release(new Response("late"));
       await waited;
@@ -167,9 +175,15 @@ function callbackRequest(path: string, body: string, signature: string): Request
   });
 }
 
-function envWith(stub: { fetch(request: Request): Promise<Response> }): Env {
+function envWith(
+  stub: { fetch(request: Request): Promise<Response> },
+  onName?: (name: string) => void,
+): Env {
   const botState = {
-    idFromName: (name: string) => env.BOT_STATE.idFromName(name),
+    idFromName: (name: string) => {
+      onName?.(name);
+      return env.BOT_STATE.idFromName(name);
+    },
     get: () => stub,
   };
   return { ...env, BOT_STATE: botState } as unknown as Env;

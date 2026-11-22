@@ -11,8 +11,8 @@ export const COLD_BOT_STATE = "global-c";
 export const BLOB_CHUNK_BYTES = 1_000_000;
 export const BLOB_VALUE_LIMIT = 8 * 1024 * 1024;
 export const KEYWORD_BLOB_KEY_LIMIT = 16;
-const LOG_BLOB_LIMIT = 2;
-const LOG_PART_BYTES = 7_900_000;
+const LOG_BLOB_LIMIT = 16;
+const LOG_PART_BYTES = 1_000_000;
 
 const KEYWORD_META_AHO = "keyword-probe-cache-meta";
 const KEYWORD_META_ROWS = "keyword-row-cache-meta";
@@ -83,9 +83,14 @@ export function userShardKey(index: number): string {
   return `c-user:${index.toString(16).padStart(2, "0")}`;
 }
 
+export function groupBlobKeyOrNull(id: string): string | null {
+  return /^[A-Za-z0-9]{1,64}$/.test(id) ? `c-group:${id}` : null;
+}
+
 export function groupBlobKey(id: string): string {
-  if (!/^[A-Za-z0-9]{1,64}$/.test(id)) throw new BlobPutError();
-  return `c-group:${id}`;
+  const key = groupBlobKeyOrNull(id);
+  if (key === null) throw new BlobPutError();
+  return key;
 }
 
 export function keywordBlobEntries(
@@ -152,7 +157,7 @@ export function splitLogBlobs(rows: readonly LogRow[]): LogRow[][] {
     parts.push(rows.slice(start, end));
     start = end;
   }
-  if (parts.length > LOG_BLOB_LIMIT) throw new Error("log archive exceeds 2 keys");
+  if (parts.length > LOG_BLOB_LIMIT) throw new Error("log archive exceeds 16 keys");
   return parts;
 }
 
@@ -162,7 +167,7 @@ export function assertBlobKey(key: string): void {
   if (/^keyword-row-cache-1-\d+$/.test(key)) return;
   if (/^c-group:[A-Za-z0-9]{1,64}$/.test(key)) return;
   if (/^c-user:[0-9a-f]{2}$/.test(key)) return;
-  if (/^c-logs:[01]$/.test(key)) return;
+  if (/^c-logs:\d{1,2}$/.test(key)) return;
   throw new BlobPutError();
 }
 

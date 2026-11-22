@@ -112,6 +112,26 @@ export function materializeKeywordTable(table: StoredKeywordTable): KeywordTable
   return map;
 }
 
+export function findKeywordRow(
+  table: KeywordStore,
+  scopeId: string | null,
+  keyword: string,
+): KeywordRow | null {
+  if (table.kind === "map") {
+    const index = table.byId.get(scopeId ?? "")?.get(keyword);
+    return index === undefined ? null : table.rows[index] ?? null;
+  }
+  if (table.kind === "stored") {
+    const index = findBaseRow(table, scopeId ?? "", keyword);
+    return index === null ? null : readStoredRow(table, index);
+  }
+  const known = table.keyIndex.get(`${scopeId ?? ""}\0${keyword}`);
+  if (known !== undefined) return readOverlayRow(table, known);
+  const index = findBaseRow(table.base, scopeId ?? "", keyword);
+  if (index === null || table.deleted.has(index)) return null;
+  return table.replaced.get(index) ?? readStoredRow(table.base, index);
+}
+
 export function encodeKeywordTable(table: KeywordTable): Uint8Array {
   const live: KeywordRow[] = [];
   for (const row of table.rows) {
@@ -636,7 +656,7 @@ function emptyOverlay(base: StoredKeywordTable): OverlayKeywordTable {
 function findBaseRow(base: StoredKeywordTable, id: string, keyword: string): number | null {
   for (const index of keywordIndexes(base, keyword)) {
     const row = readStoredRow(base, index);
-    if (row.id === id) return index;
+    if ((row.id ?? "") === id) return index;
   }
   return null;
 }

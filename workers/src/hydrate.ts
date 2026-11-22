@@ -1,4 +1,4 @@
-import { groupBlobKey, userShardIndex, userShardKey, type GroupBlob, type GroupBlobUser, type UserShard } from "./blob-store";
+import { groupBlobKeyOrNull, userShardIndex, userShardKey, type GroupBlob, type GroupBlobUser, type UserShard } from "./blob-store";
 import type { SettingsKey } from "./settings";
 
 export const HYDRATE_BATCH = 80;
@@ -82,7 +82,7 @@ export class Hydrator {
     await this.advance(groupId, null);
     const after = this.readGroup(groupId);
     if (after === null || after.done) return null;
-    return asGroupBlob(await this.storage.get(groupBlobKey(groupId)));
+    return await this.readBlob(groupId);
   }
 
   omitted(groupId: string): Set<string> {
@@ -121,6 +121,11 @@ export class Hydrator {
     return this.storage.sql.exec("SELECT id FROM cold_group WHERE done = 0 LIMIT 1").toArray()[0] !== undefined;
   }
 
+  private async readBlob(groupId: string): Promise<GroupBlob | null> {
+    const key = groupBlobKeyOrNull(groupId);
+    return key === null ? null : asGroupBlob(await this.storage.get(key));
+  }
+
   private async ensureHeader(groupId: string): Promise<void> {
     if (!this.enabled || this.groups.has(groupId)) return;
     const state = this.readGroup(groupId);
@@ -129,7 +134,7 @@ export class Hydrator {
       return;
     }
     if (state !== null) return;
-    const blob = asGroupBlob(await this.storage.get(groupBlobKey(groupId)));
+    const blob = await this.readBlob(groupId);
     this.storage.transactionSync(() => {
       if (this.readGroup(groupId) !== null) return;
       if (blob === null) {
@@ -173,7 +178,7 @@ export class Hydrator {
   private async advance(groupId: string, actor: string | null): Promise<void> {
     const state = this.readGroup(groupId);
     if (state === null || state.done) return;
-    const blob = asGroupBlob(await this.storage.get(groupBlobKey(groupId)));
+    const blob = await this.readBlob(groupId);
     if (blob === null) {
       this.storage.sql.exec("UPDATE cold_group SET done = 1 WHERE id = ?", groupId);
       this.groups.add(groupId);

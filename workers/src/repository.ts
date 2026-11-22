@@ -27,12 +27,14 @@ import {
   type KeywordSelect,
   type KeywordSelectResult,
 } from "./keywords";
+import { BLOB_CHUNK_BYTES } from "./blob-store";
 import {
   applyOverlayOp,
   applyRowDelta,
   decodeKeywordTable,
   deleteKeywordRow,
   emptyKeywordTable,
+  findKeywordRow,
   rowsForHits,
   snapshotRows,
   startEncodeJob,
@@ -94,9 +96,13 @@ export interface BotRepository {
 
 export class SqliteBotRepository implements BotRepository {
   private readonly cold: Hydrator;
+  private readonly coldMode: boolean;
+  private readonly rowSliceBytes: number;
 
   constructor(private readonly storage: DurableObjectStorage, hydrate = false) {
     this.cold = new Hydrator(storage, hydrate);
+    this.coldMode = hydrate;
+    this.rowSliceBytes = hydrate ? BLOB_CHUNK_BYTES : STORE_SLICE_BYTES;
   }
 
   private probeCache: ProbeCache | null = null;
@@ -277,7 +283,13 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async anchorLengths(): Promise<number[]> {
-    return anchorLengthList(this.storage.sql);
+    if (!this.coldMode) return anchorLengthList(this.storage.sql);
+    const cache = await this.readyCache(false);
+    const lengths = new Set<number>();
+    for (const row of snapshotRows(cache.table)) {
+      if (row.anchor !== "") lengths.add([...row.anchor].length);
+    }
+    return [...lengths].sort((left, right) => left - right);
   }
 
   async selectKeywordReplies(query: KeywordSelect): Promise<KeywordSelectResult> {
@@ -462,6 +474,18 @@ export class SqliteBotRepository implements BotRepository {
     return rowsForHits(this.probeCache?.table ?? emptyKeywordTable(), message, query, hits);
   }
 
+  private logicalKeyword(
+    cache: ProbeCache,
+    scopeId: string | null,
+    keyword: string,
+    sqlRow: KeywordExisting | null,
+  ): { author: string | null; reply: string } | null {
+    if (!this.coldMode) return sqlRow;
+    const row = findKeywordRow(cache.table, scopeId, keyword);
+    if (row === null) return null;
+    return { author: sqlRow?.author ?? null, reply: row.reply };
+  }
+
   private async noteKeywordOps(cache: ProbeCache, ops: RowDeltaOp[]): Promise<void> {
     for (const op of ops) {
       this.applyOp(cache, op);
@@ -574,8 +598,8 @@ export class SqliteBotRepository implements BotRepository {
     const rowMeta = parseMeta(await this.storage.get(ROW_META_KEY));
     const nextGen = (rowMeta?.gen ?? 0) + 1;
     if (!job.storedRows) {
-      const index = Math.floor(job.storeAt / STORE_SLICE_BYTES);
-      const end = Math.min(bytes.byteLength, job.storeAt + STORE_SLICE_BYTES);
+      const index = Math.floor(job.storeAt / this.rowSliceBytes);
+      const end = Math.min(bytes.byteLength, job.storeAt + this.rowSliceBytes);
       const slice = bytes.slice(job.storeAt, end);
       await this.storage.put(rowChunkKey(nextGen, index), slice.buffer);
       job.storeAt = end;
@@ -603,7 +627,7 @@ export class SqliteBotRepository implements BotRepository {
       job.commitAt += 1;
       return false;
     }
-    const rowChunks = Math.ceil(bytes.byteLength / STORE_SLICE_BYTES);
+    const rowChunks = Math.ceil(bytes.byteLength / this.rowSliceBytes);
     if (!job.flipped) {
       job.oldAhoGen = ahoMeta?.gen ?? 0;
       job.oldAhoChunks = ahoMeta?.chunks ?? 0;
@@ -710,17 +734,18 @@ export class SqliteBotRepository implements BotRepository {
 
   async upsertKeyword(input: KeywordWrite): Promise<KeywordWriteStatus> {
     const cache = await this.readyCache(false);
+    const sqlRow = readKeywordRow(this.storage.sql, input.scopeId, input.keyword);
+    const existing = this.logicalKeyword(cache, input.scopeId, input.keyword, sqlRow);
     let status: KeywordWriteStatus = "written";
     let wrote: RowDeltaOp | null = null;
     this.storage.transactionSync(() => {
-      const existing = readKeywordRow(this.storage.sql, input.scopeId, input.keyword);
       if (existing !== null && isProtectedReply(existing.reply) && existing.author !== input.author) {
         status = "protected";
         return;
       }
       const anchor = anchorOf(input.keyword);
       const reply = existing !== null && input.plus ? `${input.reply}__${existing.reply}` : input.reply;
-      if (existing === null) {
+      if (sqlRow === null) {
         this.storage.sql.exec(
           "INSERT INTO user_keyword (id, author, keyword, reply, anchor) VALUES (?, ?, ?, ?, ?)",
           input.scopeId,
@@ -735,7 +760,7 @@ export class SqliteBotRepository implements BotRepository {
           input.author,
           reply,
           anchor,
-          existing.id,
+          sqlRow.id,
         );
       }
       if (input.scopeId !== null) {
@@ -791,16 +816,19 @@ export class SqliteBotRepository implements BotRepository {
 
   private async deleteStoredKeyword(input: KeywordDelete): Promise<KeywordDeleteStatus> {
     const cache = await this.readyCache(false);
+    const sqlRow = readKeywordRow(this.storage.sql, input.scopeId, input.keyword);
+    const existing = this.logicalKeyword(cache, input.scopeId, input.keyword, sqlRow);
     let status: KeywordDeleteStatus = "missing";
     let wrote: RowDeltaOp | null = null;
     this.storage.transactionSync(() => {
-      const existing = readKeywordRow(this.storage.sql, input.scopeId, input.keyword);
       if (existing === null) return;
       if (isProtectedReply(existing.reply) && existing.author !== input.author) {
         status = "protected";
         return;
       }
-      this.storage.sql.exec("DELETE FROM user_keyword WHERE _id = ?", existing.id);
+      if (sqlRow !== null) {
+        this.storage.sql.exec("DELETE FROM user_keyword WHERE _id = ?", sqlRow.id);
+      }
       status = "deleted";
       wrote = { op: "del", id: input.scopeId ?? "", keyword: input.keyword, reply: "" };
     });
@@ -809,10 +837,22 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async getKeyword(input: KeywordLookup): Promise<string | null> {
-    return readKeywordRow(this.storage.sql, input.scopeId, input.keyword)?.reply ?? null;
+    if (!this.coldMode) {
+      return readKeywordRow(this.storage.sql, input.scopeId, input.keyword)?.reply ?? null;
+    }
+    const cache = await this.readyCache(false);
+    return findKeywordRow(cache.table, input.scopeId, input.keyword)?.reply ?? null;
   }
 
   async listKeywords(scopeId: string | null): Promise<string[]> {
+    if (this.coldMode) {
+      const cache = await this.readyCache(false);
+      const words: string[] = [];
+      for (const row of snapshotRows(cache.table)) {
+        if (row.id === scopeId) words.push(row.keyword);
+      }
+      return words;
+    }
     const scope = keywordScope(scopeId);
     return this.storage.sql
       .exec(`SELECT keyword FROM user_keyword WHERE ${scope.clause} ORDER BY _id`, ...scope.binds)
@@ -821,7 +861,16 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async inspectKeywords(): Promise<KeywordSnapshot> {
-    return readKeywords(this.storage.sql);
+    if (!this.coldMode) return readKeywords(this.storage.sql);
+    const cache = await this.readyCache(false);
+    const keywords = snapshotRows(cache.table).map((row) => ({
+      scopeId: row.id,
+      author: null,
+      keyword: row.keyword,
+      reply: row.reply,
+      anchor: row.anchor,
+    }));
+    return { keywords, logs: readKeywordLogs(this.storage.sql) };
   }
 
   async userName(id: string): Promise<string | null> {
@@ -1585,7 +1634,11 @@ function readKeywords(sql: SqlStorage): KeywordSnapshot {
         anchor: requiredText(record, "anchor"),
       };
     });
-  const logs = sql
+  return { keywords, logs: readKeywordLogs(sql) };
+}
+
+function readKeywordLogs(sql: SqlStorage): StoredKeywordLog[] {
+  return sql
     .exec("SELECT id, keyword, reply, create_on FROM keywords_logs ORDER BY rowid")
     .toArray()
     .map((row) => {
@@ -1597,7 +1650,6 @@ function readKeywords(sql: SqlStorage): KeywordSnapshot {
         createOn: optionalText(record, "create_on"),
       };
     });
-  return { keywords, logs };
 }
 
 function objectRecord(value: unknown, name: string): Record<string, unknown> {

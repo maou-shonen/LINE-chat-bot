@@ -2,7 +2,8 @@ import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test"
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import worker from "../src";
-import { GLOBAL_BOT_STATE, type BotState } from "../src/bot-state";
+import type { BotState } from "../src/bot-state";
+import { COLD_BOT_STATE } from "../src/blob-store";
 import suiteJson from "../../fixtures/suite.json";
 
 interface Step {
@@ -41,7 +42,7 @@ const suite = suiteJson as unknown as Suite;
 describe("fixture suite", () => {
   it("replays every step", async () => {
     const failures: string[] = [];
-    const stub = env.BOT_STATE.get(env.BOT_STATE.idFromName(GLOBAL_BOT_STATE)) as DurableObjectStub<BotState>;
+    const stub = env.BOT_STATE.get(env.BOT_STATE.idFromName(COLD_BOT_STATE)) as DurableObjectStub<BotState>;
     for (const step of suite.steps) {
       try {
       const calls = installFetch(step);
