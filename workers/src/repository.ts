@@ -776,7 +776,7 @@ export class SqliteBotRepository implements BotRepository {
     const ids = new Set<number>();
     for (const anchor of anchors) {
       if (anchor === "" && !base.emptyAnchor) continue;
-      ids.add(keywordChunk(anchor));
+      ids.add(keywordChunk(anchor, base.chunkCount));
     }
     const missing = [...ids].filter((id) => !base.loaded.has(id));
     phases.count("chunksMissing", missing.length);
@@ -801,7 +801,11 @@ export class SqliteBotRepository implements BotRepository {
     if (ids.length === 0) return;
     const keys = ids.map((id) => rowChunkKey(base.gen, id));
     const getStart = phases.enabled ? performance.now() : 0;
-    const values = await this.storage.get(keys);
+    const batches: Array<Promise<Map<string, unknown>>> = [];
+    for (let at = 0; at < keys.length; at += 16) {
+      batches.push(this.storage.get(keys.slice(at, at + 16)));
+    }
+    const values = new Map((await Promise.all(batches)).flatMap((batch) => [...batch]));
     if (phases.enabled) phases.add("chunkGet", performance.now() - getStart);
     for (let i = 0; i < ids.length; i += 1) {
       const raw = asBytes(values.get(keys[i] ?? ""));
@@ -1516,6 +1520,7 @@ function parseKeywordMeta(value: unknown): KeywordMeta | null {
   if ((record.ahoChunks as number) < 1 || (record.rowChunks as number) < 1 || (record.rowChunks as number) > 256) {
     return null;
   }
+  if (((record.rowChunks as number) & ((record.rowChunks as number) - 1)) !== 0) return null;
   const lengths = record.lengths;
   if (!Array.isArray(lengths) || lengths.some((length) => typeof length !== "number" || !Number.isInteger(length) || length < 1)) {
     return null;

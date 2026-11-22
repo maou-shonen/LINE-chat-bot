@@ -39,7 +39,7 @@ describe("long keyword messages", () => {
 
     await cold.measureColdRequest(queryFor("", []), 1);
     expect(await cold.selectKeywordReplies(query)).toEqual(sqlResult);
-    expect(await cold.keywordCacheStats()).toMatchObject({ rowChunks: 8, anchors: COUNT });
+    expect(await cold.keywordCacheStats()).toMatchObject({ rowChunks: 64, anchors: COUNT });
   });
 });
 
