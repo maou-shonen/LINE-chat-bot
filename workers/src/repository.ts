@@ -96,6 +96,7 @@ export interface BotRepository {
   auditKeywordSelect(query: KeywordSelect): Promise<KeywordAudit>;
   compactKeywordCache(): Promise<KeywordCompact>;
   prefetchChunks(): Promise<KeywordPrefetch>;
+  scheduleAlarmNoLaterThan(target: number): Promise<void>;
   measureKeywordWrite(sample: KeywordWriteSample): Promise<KeywordWriteMeasure>;
   touchAndCount(input: TouchAndCount): Promise<void>;
   inspectTouch(): Promise<TouchRows>;
@@ -130,7 +131,7 @@ export class SqliteBotRepository implements BotRepository {
     hydrate = false,
     private readonly timing = false,
   ) {
-    this.cold = new Hydrator(storage, hydrate);
+    this.cold = new Hydrator(storage, hydrate, (target) => this.scheduleAlarmNoLaterThan(target));
     this.coldMode = hydrate;
     this.rowSliceBytes = hydrate ? BLOB_CHUNK_BYTES : STORE_SLICE_BYTES;
   }
@@ -142,6 +143,7 @@ export class SqliteBotRepository implements BotRepository {
   private rowsRead = 0;
   private compactJob: CompactJob | null = null;
   private compactQueue: Promise<void> = Promise.resolve();
+  private alarmQueue: Promise<void> = Promise.resolve();
 
   private phases(): PhaseTimer {
     return this.timing ? new PhaseTimer(true) : NO_PHASES;
@@ -871,14 +873,21 @@ export class SqliteBotRepository implements BotRepository {
     phases.flush("prefetchSchedule");
   }
 
+  // Shared chain; only ever pull the alarm earlier, never overwrite a nearer step.
+  async scheduleAlarmNoLaterThan(target: number): Promise<void> {
+    const step = this.alarmQueue.then(async () => {
+      const current = await this.storage.getAlarm();
+      if (current === null || current > target) await this.storage.setAlarm(target);
+    });
+    this.alarmQueue = step.then(() => undefined, () => undefined);
+    return step;
+  }
+
   private async schedulePrefetch(cache: ProbeCache): Promise<void> {
     if (this.compactJob !== null) return;
     const base = cache.table.kind === "overlay" ? cache.table.base : cache.table;
     if (base.kind !== "chunked" || base.loaded.size >= base.chunkCount) return;
-    const target = Date.now() + PREFETCH_DELAY_MS;
-    const current = await this.storage.getAlarm();
-    if (current !== null && current <= target) return;
-    await this.storage.setAlarm(target);
+    await this.scheduleAlarmNoLaterThan(Date.now() + PREFETCH_DELAY_MS);
   }
 
   async prefetchChunks(): Promise<KeywordPrefetch> {
@@ -915,7 +924,7 @@ export class SqliteBotRepository implements BotRepository {
     if (cache === null || (!this.compactJob && !this.needsCompact(cache))) return;
     await this.compactKeywordCache();
     if (this.compactJob !== null || (this.probeCache !== null && this.needsCompact(this.probeCache))) {
-      await this.storage.setAlarm(Date.now() + 10);
+      await this.scheduleAlarmNoLaterThan(Date.now() + 10);
     }
   }
 
