@@ -16,6 +16,7 @@ export interface KeywordRow {
   keyword: string;
   reply: string;
   anchor: string;
+  author: string | null;
 }
 
 export interface KeywordRng {

@@ -30,7 +30,7 @@ export default {
           signature: request.headers.get("x-line-signature"),
         });
         if (!ok) return new Response(null, { status: 400 });
-        const stub = env.BOT_STATE.get(env.BOT_STATE.idFromName(GLOBAL_BOT_STATE));
+        const stub = env.BOT_STATE.get(env.BOT_STATE.idFromName(COLD_BOT_STATE));
         const forwarded = new Request(request.url, {
           method: "POST",
           headers: request.headers,
