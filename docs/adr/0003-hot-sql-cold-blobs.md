@@ -151,8 +151,8 @@
 | 匯入 | 約 4,700 rows，**不到 1 天**（約一天額度的 5%）〔估算，依 1.3 實測〕 |
 | 日常寫入 | 同 A，加上 hydration 的一次性寫入 |
 | 日常讀取 | 比 A 少，SQL 表只有熱資料 |
-| 10 ms 風險 | 低到中。冷啟動要 `get` 約 12 MB 關鍵字 blob，那是 I/O，不算 CPU。自動機解碼 0.7 ms〔實測〕。hydration 解析 ≤110 KB JSON，再插入最多約 1,300 列〔估算約 3–5 ms〕。最大的幾個群組要分批，用 alarm 續做 |
-| 記憶體 | 約 12 MB blob 加索引，128 MB 上限〔官方〕內 |
+| 10 ms 風險 | 低。冷啟動 `get` 15.9 MB 關鍵字 blob 的 workerd process CPU 是 50–60 ms，那是本機第一請求含 isolate 啟動；同一請求的 wall 是 44–48 ms。解碼只是掛上 view，2–4 ms。hydration 最大群組（659 人）第一則 wall 2–3 ms，8 個 alarm 步驟合計 15–20 ms，SQL rows written 2,664〔實測〕。最大的幾個群組要分批，用 alarm 續做 |
+| 記憶體 | 冷啟動 15.9 MB blob 後，workerd process RSS 增加 42.8–44.0 MB〔實測〕，128 MB 上限〔官方〕內 |
 | 回滾 | 簡單。沒被碰過的 blob 和 NAS 原資料一樣，只要匯出 SQL 熱表（切換後才建立或改過的列）加上關鍵字 overlay |
 | 改動量 | 中到大。要做：離線建置與上傳工具、repository 的 hydration 層、關鍵字指令改讀 blob、新的匯入端點（寫 KV）。dispatch 和 fixture 不用動 |
 
@@ -177,7 +177,7 @@
 | DO 請求（含 RPC、alarm） | 100,000/日（[DO pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)） | 約 2,600 + 少量 compaction alarm | 約 3% | 估算 |
 | DO rows written（含 SQL 索引、DO KV `put`/`delete`、`setAlarm`） | 100,000/日（同上，註 2–4） | 約 8,000：每則群組文字在名字沒變時寫 3 列，名字有變 4 列，第一次見到的使用者 6 列，有回應時另加 1 列「觸發」；另有 hydration 一次性約 5–10k，分散在多天 | 約 8%，尖峰約 24% | 每則列數為實測（#63，miniflare），日量為估算 |
 | DO rows read（含 DO KV `get`） | 5,000,000/日（同上） | 每則群組文字 5–8 列（#63 修正後，miniflare cursor 計數），約 2,600 × 8 ≈ 21k；關鍵字冷啟動每次 `get` ≤16 個 key | <1% | 每則列數為實測（miniflare），日量為估算 |
-| DO 儲存 | 帳號 5 GB；單一 DO 上限 10 GB（[DO limits](https://developers.cloudflare.com/durable-objects/platform/limits/)） | 約 12 MB 關鍵字 blob + 約 15 MB 群組 blob + 熱資料 SQL，<50 MB | <1% | 估算（依快照實測大小） |
+| DO 儲存 | 帳號 5 GB；單一 DO 上限 10 GB（[DO limits](https://developers.cloudflare.com/durable-objects/platform/limits/)） | 4,718 個 key，value 50.76 MB，加 key 50.95 MB，熱資料 SQL 另計 | 約 1% | 實測（快照建置的 blob 檔案大小） |
 | DO duration | 13,000 GB-s/日（DO pricing） | 未量測。最壞情況整天常駐約 10,800 GB-s（83%），實際只在有事件時活著 | 不適用 | 未量測（ADR-0001 估算） |
 | Workers KV | 讀 100,000/日、寫 1,000/日（[KV pricing](https://developers.cloudflare.com/kv/platform/pricing/)） | 不使用 | 0 | 不適用 |
 | D1 | 讀 5M/日、寫 100k/日（[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/)） | 不使用 | 0 | 不適用 |
@@ -225,8 +225,30 @@
 
 為什麼不是 D：計費模型一樣，搬過去只換到網路延遲，外加兩套儲存。
 
-## 4. 待量測（不阻擋決定，但實作前要補）
+## 4. 量測結果（2026-11-22，本機 workerd）
 
-1. 台北 08:00 之後，在 workers.dev 重測：每則訊息的實際 rows written，以及 DO 端 CPU（GraphQL `durableObjectsPeriodicGroups.sum.cpuTime`，telemetry 的 `$workers.cpuTimeMs`），包含 1.5 修正前後。
-2. 在 workerd 量：冷啟動 `get` 12 MB blob 的 wall time 和記憶體，以及 hydration 最大群組（659 人）的 CPU。
-3. D1 和 DO 是否共用每天 100k 寫入額度。R2 在這個帳號的啟用狀態。
+方法：`workers/bench/c-measure.bench.ts` 跑 miniflare，載入快照建置的真實 blob，用 `storage.sql.exec` cursor 計 rows read/written，`performance.now()` 計 wall。`workers/bench/c-local.mjs` 起 `wrangler dev --local`，從 `/proc` 讀 workerd process CPU（100 Hz）和 RSS。沒有連 Cloudflare。16 核，load average 0.22–0.24。完整表格見 `workers/bench/RESULTS.md`。
+
+| 項目 | 數字 | 單位 |
+|---|---|---|
+| 關鍵字 blob | chunk 15,873,670 bytes，2 個 meta 另計，15 個 key，最大 row chunk 1,300,000 bytes，每次冷啟動 16 個 `get` | — |
+| 冷啟動解碼（isolate 內，3 輪） | 2–4 ms | wall |
+| 冷啟動後第一則私訊（重啟 workerd） | wall 43.9–48.1 ms，process CPU 50–60 ms，RSS +42.8–44.0 MB（3 次） | 混合 |
+| 同一則暖路徑 | wall 6.1–6.5 ms，process CPU 0–20 ms，RSS +0.8–0.95 MB | 混合 |
+| 659 人群 hydration，第一則 | 2–3 ms wall；SQL 64 rows read、2,664 rows written，含 8 個 alarm 步驟 | wall／rows |
+| 每個 hydration alarm | 最大 2–5 ms；8 步合計 15–20 ms | wall |
+| hydrate 後群組文字訊息 | 1–2 ms，5 rows read、3 rows written | 混合 |
+| 私訊（keyword 已載入） | 2 ms，0 rows read、4 rows written；暖 0–1 ms，1 read、1 write | 混合 |
+| 觸發回覆（keyword overlay，LINE fetch 以測試替身） | 1–2 ms，5–6 rows read、3 rows written | 混合 |
+| `/import/kv` 最大 key | 1.0–1.3 MB：DO 內 8–13 ms wall；經 HTTP 13–15 ms wall、process CPU 0–30 ms | 混合 |
+| 全部 4,717 個 blob（50.76 MB）| 12.7 s wall、13.0 s process CPU、RSS 峰值 +550 MB（1 次） | 混合 |
+| 上傳 put 數 | 4,718（含 manifest），約每日 100k 寫入額度的 4.7% | rows written |
+| DO 儲存 | value 50,764,147 bytes（含 manifest），key 184,391 bytes，合計 50.95 MB | bytes |
+
+限制：
+
+- workerd 沒有 isolate CPU 或 heap 指標。CPU 是整個 workerd process 的 utime 加 stime，解析度 10 ms；小於 10 ms 的值會落在 0–10 ms。
+- 冷啟動第一則包含 Worker entry 和 DO isolate 啟動，不只 blob 讀取。暖路徑是同一個 process 的第二則。
+- rows read/written 是 SQLite cursor 計數，和計費基礎一致；KV `get` 的列數另計（冷啟動 16 個）。
+- 上傳的 550 MB RSS 是 4,717 個請求的瞬時峰值，不是常駐。
+- 還沒量：台北 08:00 後 workers.dev 的實際 rows written 與 GraphQL CPU；D1 與 DO 是否共用 100k 寫入額度；R2 啟用狀態。
