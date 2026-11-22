@@ -801,20 +801,16 @@ export class SqliteBotRepository implements BotRepository {
     if (ids.length === 0) return;
     const keys = ids.map((id) => rowChunkKey(base.gen, id));
     const getStart = phases.enabled ? performance.now() : 0;
-    const batches: Array<Promise<Map<string, unknown>>> = [];
-    for (let at = 0; at < keys.length; at += 16) {
-      batches.push(this.storage.get(keys.slice(at, at + 16)));
-    }
-    const values = new Map((await Promise.all(batches)).flatMap((batch) => [...batch]));
+    // One get for all chunk ids (64 at most, under the 128 key limit).
+    // Concurrent batch gets were the only new read path when CI missed a chunk.
+    const values = await this.storage.get(keys);
     if (phases.enabled) phases.add("chunkGet", performance.now() - getStart);
     for (let i = 0; i < ids.length; i += 1) {
       const raw = asBytes(values.get(keys[i] ?? ""));
       if (raw === null) {
         const meta = await this.readMeta();
-        const genKeys = await this.storage.list({ prefix: `keyword-rows-${base.gen}-` });
-        const metaKeys = meta === null ? null : await this.storage.list({ prefix: `keyword-rows-${meta.rowGen}-` });
         throw new TypeError(
-          `keyword row chunk was missing gen=${base.gen} id=${ids[i]} chunks=${base.chunkCount} metaGen=${meta?.rowGen} metaChunks=${meta?.rowChunks} genKeys=${genKeys.size} metaKeys=${metaKeys?.size}`,
+          `keyword row chunk was missing gen=${base.gen} id=${ids[i]} chunks=${base.chunkCount} meta=${meta?.rowGen}/${meta?.rowChunks}`,
         );
       }
       phases.count("chunkBytes", raw.byteLength);

@@ -334,7 +334,7 @@ npm run bench
 - 重切驗證：50,929 列、50,929 個 ordinal、keyword hash 集合、anchor 分組大小都和 v4 相同。
 - `keywordChunk` 依 meta 的 chunk 數取 anchor hash 高位。舊的 8 塊 meta 用 3 bits 讀，新的 64 塊用 6 bits 讀，升級不用清 cache。
 - key 數 66，低於 `KEYWORD_BLOB_KEY_LIMIT` 128。allowlist 不用改。
-- 讀取時每 16 個 key 併發 multi-get，64 塊拆成 4 次。冷啟動短訊息只有 1 塊，仍是 1 次 get。
+- 讀取時一次 multi-get 讀完缺少的 chunk（最多 64 個 key，低於 128 上限）。冷啟動短訊息只有 1 塊，仍是 1 次 get。
 
 ## 冷啟動與長訊息
 
@@ -386,7 +386,7 @@ npm run bench
 ## 限制
 
 - 冷 5000 字變慢。320 個命中 anchor 落在 63/64 個分區，讀到 63 塊共 14.59 MB；v4 讀 7/8 塊共 12.89 MB。本機 wall 從 29.7–33.3 ms 升到 38.9–41.6 ms。
-- multi-get 每批 16 個 key 併發（4 次）。一次讀完 64 塊時冷 5000 字是 45–49 ms，併發後 39–42 ms。8 與 32 的 batch 在本機沒有明顯差別，短訊息不受影響。
+- 冷長訊息要一次讀 64 塊。一次 multi-get 的冷 5000 字是 45–49 ms；先前每批 16 個 key 併發 4 次是 39–42 ms。CI 在併發版本掉過一次 chunk value（`keyword row chunk was missing`），本機重跑沒再現，已退回單次 get，短訊息不受影響。
 - `listKeywords`、`inspectKeywords` 冷啟動仍會載入全部 64 塊，沒有另外量。
 - 非 2 的次方的 `rowChunks` 會被 meta 驗證拒絕，當成沒有 cache。
 

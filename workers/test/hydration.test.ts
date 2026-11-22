@@ -195,8 +195,9 @@ describe("cold hydration", () => {
     await stub.recordMessage(text("Gbig", "U0002", "hi"), NOW);
     const follow = await readMeter(stub);
     expect(follow.rowsRead).toBeLessThan(40);
-    expect(firstMs).toBeLessThan(50);
-    expect(alarmMs).toBeLessThan(50);
+    // Wall-clock liveness bound only; CI pauses have hit 69 ms. Latency lives in bench/.
+    expect(firstMs).toBeLessThan(250);
+    expect(alarmMs).toBeLessThan(250);
     console.log(JSON.stringify({
       batch: HYDRATE_BATCH,
       firstMs: Math.round(firstMs * 10) / 10,
