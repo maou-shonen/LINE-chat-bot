@@ -245,7 +245,12 @@ export class BotState extends DurableObject<Env> {
     phases.end("compact");
     phases.count("moreCold", moreCold ? 1 : 0);
     phases.count("compactDone", step.done ? 1 : 0);
-    if (moreCold || !step.done) await this.ctx.storage.setAlarm(Date.now() + 10);
+    phases.start("prefetch");
+    const prefetch = await this.repo.prefetchChunks();
+    phases.end("prefetch");
+    phases.count("prefetchChunks", prefetch.chunks);
+    phases.count("prefetchBytes", prefetch.bytes);
+    if (moreCold || !step.done || prefetch.more) await this.ctx.storage.setAlarm(Date.now() + 10);
     phases.flush("alarm");
   }
 

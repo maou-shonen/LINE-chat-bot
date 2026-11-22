@@ -71,6 +71,8 @@ const EXPORT_SQL: Record<ExportTable, { from: string; columns: string }> = {
 
 const DELTA_META_KEY = "keyword-row-delta-meta";
 const COMPACT_BUDGET_MS = 1;
+const PREFETCH_CHUNKS = 2;
+const PREFETCH_DELAY_MS = 50;
 export const KEYWORD_DELTA_LIMIT = 32;
 const STORE_SLICE_BYTES = 200_000;
 
@@ -92,6 +94,7 @@ export interface BotRepository {
   keywordCacheStats(): Promise<KeywordCacheStats>;
   auditKeywordSelect(query: KeywordSelect): Promise<KeywordAudit>;
   compactKeywordCache(): Promise<KeywordCompact>;
+  prefetchChunks(): Promise<KeywordPrefetch>;
   measureKeywordWrite(sample: KeywordWriteSample): Promise<KeywordWriteMeasure>;
   touchAndCount(input: TouchAndCount): Promise<void>;
   inspectTouch(): Promise<TouchRows>;
@@ -131,7 +134,7 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   private probeCache: ProbeCache | null = null;
-  private cacheStats: KeywordCacheStats = {
+  private cacheStats: Omit<KeywordCacheStats, "rowChunksLoaded"> = {
     buildMs: 0, bytes: 0, chunks: 0, anchors: 0, rowBytes: 0, rowChunks: 0,
   };
   private rowsRead = 0;
@@ -586,7 +589,7 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async keywordCacheStats(): Promise<KeywordCacheStats> {
-    return this.cacheStats;
+    return { ...this.cacheStats, rowChunksLoaded: this.loadedRowChunks() };
   }
 
   private async runSelect(query: KeywordSelect): Promise<KeywordSelectResult> {
@@ -675,6 +678,7 @@ export class SqliteBotRepository implements BotRepository {
     const loaded = await this.loadCold(phases);
     const cache = await this.installCache(loaded.meta, loaded.aho, loaded.delta, phases);
     phases.flush("cacheLoad");
+    await this.schedulePrefetch(cache);
     return cache;
   }
 
@@ -819,14 +823,15 @@ export class SqliteBotRepository implements BotRepository {
     base: ChunkedKeywordTable,
     ids: readonly number[],
     phases: PhaseTimer = NO_PHASES,
-  ): Promise<void> {
-    if (ids.length === 0) return;
+  ): Promise<{ chunks: number; bytes: number }> {
+    if (ids.length === 0) return { chunks: 0, bytes: 0 };
     const keys = ids.map((id) => rowChunkKey(base.gen, id));
     const getStart = phases.enabled ? performance.now() : 0;
     // One get for all chunk ids (64 at most, under the 128 key limit).
     // Concurrent batch gets were the only new read path when CI missed a chunk.
     const values = await this.storage.get(keys);
     if (phases.enabled) phases.add("chunkGet", performance.now() - getStart);
+    let bytes = 0;
     for (let i = 0; i < ids.length; i += 1) {
       const raw = asBytes(values.get(keys[i] ?? ""));
       if (raw === null) {
@@ -835,12 +840,56 @@ export class SqliteBotRepository implements BotRepository {
           `keyword row chunk was missing gen=${base.gen} id=${ids[i]} chunks=${base.chunkCount} meta=${meta?.rowGen}/${meta?.rowChunks}`,
         );
       }
+      bytes += raw.byteLength;
       phases.count("chunkBytes", raw.byteLength);
       const decodeStart = phases.enabled ? performance.now() : 0;
       const chunk = decodeKeywordTable(raw);
       if (phases.enabled) phases.add("chunkDecode", performance.now() - decodeStart);
       registerChunk(base, ids[i] as number, chunk);
     }
+    return { chunks: ids.length, bytes };
+  }
+
+  private loadedRowChunks(): number {
+    const cache = this.probeCache;
+    if (cache === null) return 0;
+    const base = cache.table.kind === "overlay" ? cache.table.base : cache.table;
+    return base.kind === "chunked" ? base.loaded.size : 0;
+  }
+
+  private async schedulePrefetch(cache: ProbeCache): Promise<void> {
+    if (this.compactJob !== null) return;
+    const base = cache.table.kind === "overlay" ? cache.table.base : cache.table;
+    if (base.kind !== "chunked" || base.loaded.size >= base.chunkCount) return;
+    const target = Date.now() + PREFETCH_DELAY_MS;
+    const current = await this.storage.getAlarm();
+    if (current !== null && current <= target) return;
+    await this.storage.setAlarm(target);
+  }
+
+  async prefetchChunks(): Promise<KeywordPrefetch> {
+    const started = performance.now();
+    const stop = (): KeywordPrefetch => ({ chunks: 0, bytes: 0, more: false, ms: performance.now() - started });
+    const cache = this.probeCache;
+    if (cache === null || this.compactJob !== null) return stop();
+    const base = cache.table.kind === "overlay" ? cache.table.base : cache.table;
+    if (base.kind !== "chunked") return stop();
+    const ids: number[] = [];
+    for (let id = 0; id < base.chunkCount && ids.length < PREFETCH_CHUNKS; id += 1) {
+      if (!base.loaded.has(id)) ids.push(id);
+    }
+    if (ids.length === 0) return stop();
+    let loaded: { chunks: number; bytes: number };
+    try {
+      loaded = await this.loadChunks(base, ids);
+    } catch (error) {
+      // A compaction may have replaced the cache and deleted the old generation
+      // while this step was waiting on storage.
+      if (this.probeCache !== cache) return stop();
+      throw error;
+    }
+    const more = this.probeCache === cache && this.compactJob === null && base.loaded.size < base.chunkCount;
+    return { ...loaded, more, ms: performance.now() - started };
   }
 
   private needsCompact(cache: ProbeCache): boolean {
@@ -1430,6 +1479,7 @@ export interface KeywordCacheStats {
   anchors: number;
   rowBytes: number;
   rowChunks: number;
+  rowChunksLoaded: number;
 }
 
 export interface KeywordAudit {
@@ -1490,6 +1540,13 @@ export interface KeywordCompact {
   done: boolean;
   ms: number;
   phase: string;
+}
+
+export interface KeywordPrefetch {
+  chunks: number;
+  bytes: number;
+  more: boolean;
+  ms: number;
 }
 
 export interface KeywordWriteSample {
