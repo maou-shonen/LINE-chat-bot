@@ -237,7 +237,7 @@ C_BLOB_DIR=/tmp/c-blob-build-current npm run bench:local
 
 | 項目 | 數字 |
 |---|---|
-| 冷啟動 keyword blob | 10 個 key，16,077,526 bytes；每輪 3 個 `get` |
+| 冷啟動 keyword blob | 10 個 key，16,077,526 bytes（meta 361 bytes 另計）；每輪 3 個 `get` |
 | 冷啟動 decode | 0 ms（automaton 零複製 view） |
 | 冷啟動 request（decode 後） | 0–1 ms |
 | 5000 字，真實語料，1591 候選 | scan 1 ms、fetch 2 ms、match 1 ms |
@@ -268,10 +268,10 @@ C_BLOB_DIR=/tmp/c-blob-build-current npm run bench:local
 
 ## 上傳
 
-- 新 build：4,712 個 key、50,968,114 bytes。4,703 個非關鍵字 key 內容不變，只有 `c-manifest.json` 變。
+- 新 build：4,712 個 blob key、50,968,114 bytes；build 的 puts 是 4,713（含 `c-manifest`）。4,703 個非關鍵字 key 內容不變，只有 `c-manifest` 變。
 - 舊 build 有 15 個關鍵字 key，新 build 有 10 個；新舊 key 名稱完全不同。
 - 只重傳有變動的 key：10 個新關鍵字 key 加 `c-manifest`，共 11 個 put（約每日 100k 寫入的 0.011%）。
-- 全量上傳：4,712 個 put、12.6 s wall、13.0 s process CPU、RSS 峰值 +560 MB。這是 4,712 個請求的瞬時峰值，不是常駐。
+- 全量上傳：4,713 個 put（含 `c-manifest`；`bench:local` 不含 manifest 是 4,712）、12.6 s wall、13.0 s process CPU、RSS 峰值 +560 MB。這是 4,712 個請求的瞬時峰值，不是常駐。
 - 舊的 15 個 gen 1 key 沒有刪除端點，會留在 DO storage（約 15.9 MB）。可接受就留著，要清需另開管理路徑。
 
 ## 限制

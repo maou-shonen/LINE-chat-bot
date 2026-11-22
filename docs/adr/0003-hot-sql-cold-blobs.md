@@ -259,14 +259,14 @@
 
 | 項目 | v4 | v3 |
 |---|---|---|
-| 關鍵字 blob | 10 個 key，16,077,526 bytes；8 個 row chunk，最大 1,987,892 bytes | 15 個 key，15,873,772 bytes |
+| 關鍵字 blob | 10 個 key，16,077,526 bytes（meta 361 bytes 另計）；8 個 row chunk，最大 1,987,892 bytes | 15 個 key，15,873,772 bytes |
 | 冷啟動 `get` | 3（meta、aho、delta meta） | 16 |
 | 冷啟動 decode | 0 ms | 2–4 ms |
 | 冷啟動第一則私訊 | wall 14.5–17.7 ms；process CPU 0–20 ms；RSS +7.0–11.4 MB | wall 43.9–48.1 ms；CPU 50–60 ms；RSS +42.8–44.0 MB |
 | 5000 字真實語料，暖 | p50 3 ms、p95 4 ms；scan 1、fetch 2、match 1 ms | 約 30 ms（Cloudflare，扣冷啟動） |
 | 5000 字真實語料，冷 | p50 18 ms、p95 24 ms（讀完 8 個 chunk、14.8 MB） | 未量 |
 | compaction 單段 | 最大 3 ms（偶發 13 ms wall 尖峰），50,929 列約 280–293 段 | 最大 3 ms |
-| 上傳 | 4,712 個 key、50,968,114 bytes；只重傳有變動的 11 個 put | 4,718 個 put |
+| 上傳 | 4,712 個 blob key、50,968,114 bytes；build 的 puts 是 4,713（含 manifest），只重傳有變動的 11 個 put | 4,718 個 put |
 
 限制：workerd 的 process CPU 解析度是 10 ms，冷啟動 0–20 ms 只能說接近或低於 10 ms；冷啟動後第一則若本身就是 5000 字且命中大量 anchor，仍需讀完所有 row chunk，這是 lazy chunk 的資料量下限。完整表格與重跑指令見 `workers/bench/RESULTS.md` 的「Option C v4」。
 
