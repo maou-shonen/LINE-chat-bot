@@ -95,7 +95,15 @@ const V3 = [
   )`,
 ];
 
-const MIGRATIONS = [V1, V2, V3];
+const V4 = [
+  `CREATE TABLE IF NOT EXISTS group_user_tombstone (
+    gid TEXT NOT NULL DEFAULT '',
+    uid TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (gid, uid)
+  )`,
+];
+
+const MIGRATIONS = [V1, V2, V3, V4];
 
 const INSPECT_TABLES = [
   "user",
@@ -105,6 +113,7 @@ const INSPECT_TABLES = [
   "user_keyword",
   "user_settings",
   "keyword_tombstone",
+  "group_user_tombstone",
 ];
 
 export function migrateSql(sql: SqlStorage): void {

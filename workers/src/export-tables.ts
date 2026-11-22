@@ -6,6 +6,7 @@ export const EXPORT_TABLES = [
   "user_keyword",
   "keywords_logs",
   "keyword_tombstone",
+  "group_user_tombstone",
 ] as const;
 
 export type ExportTable = (typeof EXPORT_TABLES)[number];

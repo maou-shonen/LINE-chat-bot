@@ -209,6 +209,7 @@ export class Hydrator {
   }
 
   private insertMembers(groupId: string, members: readonly GroupBlobUser[], omit: Set<string>): void {
+    const inserted: string[] = [];
     for (const member of members) {
       if (omit.has(member.uid)) continue;
       this.storage.sql.exec(
@@ -223,7 +224,15 @@ export class Hydrator {
         member._count,
         member._setting,
       );
+      inserted.push(member.uid);
     }
+    if (inserted.length === 0) return;
+    const placeholders = inserted.map(() => "?").join(", ");
+    this.storage.sql.exec(
+      `DELETE FROM group_user_tombstone WHERE gid = ? AND (uid = '' OR uid IN (${placeholders}))`,
+      groupId,
+      ...inserted,
+    );
   }
 
   private checkedUser(id: string): boolean {

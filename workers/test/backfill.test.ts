@@ -88,10 +88,43 @@ describe("cold export", () => {
     const tombstones = await exportAll("keyword_tombstone", 1);
     expect(tombstones).toEqual([{ id: "G1", keyword: "kdel" }]);
 
+    expect(await exportAll("group_user_tombstone", 1)).toEqual([]);
+
     const logs = await exportAll("keywords_logs", 1);
     expect(logs).toHaveLength(2);
 
     for (const table of EXPORT_TABLES) expect(table.startsWith("cold_")).toBe(false);
+  });
+
+  it("records member deletes and clears them when the member speaks again", async () => {
+    await stub.deleteGroupUsers("G1", "U1");
+    expect(await exportAll("group_user_tombstone", 1)).toEqual([{ gid: "G1", uid: "U1" }]);
+    expect((await exportAll("group_user", 1)).map((row) => `${row.gid}/${row.uid}`)).toEqual(["G2/U2"]);
+
+    await stub.recordMessage(text("G1", "U1"), NOW);
+    expect(await exportAll("group_user_tombstone", 1)).toEqual([]);
+    expect((await exportAll("group_user", 1)).map((row) => `${row.gid}/${row.uid}`).sort()).toEqual([
+      "G1/U1",
+      "G2/U2",
+    ]);
+  });
+
+  it("records whole-group deletes, pages tombstones one at a time, and clears them when the group returns", async () => {
+    await stub.deleteGroupUsers("G1", "U1");
+    await stub.deleteGroupUsers("G2", null);
+
+    const first = await page("group_user_tombstone", 0, 1);
+    expect(first.rows).toHaveLength(1);
+    expect(typeof first.next).toBe("number");
+    expect(await exportAll("group_user_tombstone", 1)).toEqual([
+      { gid: "G1", uid: "U1" },
+      { gid: "G2", uid: "" },
+    ]);
+    expect(await exportAll("group_user", 1)).toEqual([]);
+
+    await stub.recordMessage(text("G2", "U2"), NOW);
+    expect(await exportAll("group_user_tombstone", 1)).toEqual([{ gid: "G1", uid: "U1" }]);
+    expect((await exportAll("group_user", 1)).map((row) => `${row.gid}/${row.uid}`)).toEqual(["G2/U2"]);
   });
 
   it("rejects export without the secret and unknown tables", async () => {

@@ -28,7 +28,7 @@
 1. 重跑離線 build 與上傳（見 [import.md](import.md)）。同一個 key 會覆寫，重跑安全。
 2. 在 workers.dev 用模擬 webhook 打幾個群組、使用者、關鍵字，確認：
    - 回覆和 Python 版相同。
-   - `GET /export` 的 `user`、`group`、`group_user`、`user_settings`、`user_keyword`、`keywords_logs`、`keyword_tombstone` 有預期列數。
+   - `POST /export` 的 `user`、`group`、`group_user`、`user_settings`、`user_keyword`、`keywords_logs`、`keyword_tombstone`、`group_user_tombstone` 有預期列數。
 3. 記下 LINE console 目前的 webhook URL，回滾要用。
 
 ## 2. 切 webhook（需使用者在線並確認）
@@ -78,7 +78,7 @@
 
    - `--endpoint` 只接受 `/export`，且只接受 https 或 localhost 的 http。
    - 讀取分頁，每頁 200 列；整份套用在單一 transaction，失敗會 rollback。
-   - 重跑安全：`user`、`group` 以 `id` upsert；`group_user`、`user_settings` 以 `(gid, uid)`、`(group_id, user_id)` upsert；`user_keyword` 以 `(id, keyword)` upsert；`keywords_logs` 以 `_id` 插入；`keyword_tombstone` 執行 delete。
+   - 重跑安全：`user`、`group` 以 `id` upsert；`group_user`、`user_settings` 以 `(gid, uid)`、`(group_id, user_id)` upsert；`user_keyword` 以 `(id, keyword)` upsert；`keywords_logs` 以 `_id` 插入；`keyword_tombstone`、`group_user_tombstone` 執行 delete。
    - 輸出的只有每表列數，不含訊息或關鍵字內容。
 
 5. 確認 NAS 的表格列數與抽查內容後，再恢復 NAS 寫入。
@@ -88,6 +88,7 @@
 
 - 熱 SQL：`user`、`group`、`group_user`、`user_settings`、`user_keyword`、`keywords_logs`。
 - 關鍵字 tombstone：`keyword_tombstone`，代表切換後刪掉的基底關鍵字。
+- 群組成員 tombstone：`group_user_tombstone`，代表切換後刪掉的 `group_user` 列，套用時執行 delete（和 `keyword_tombstone` 一樣）。`uid = ''` 表示該群組全部成員被刪除；此時只刪 `group_user`，不刪 `"group"`、`user`、`user_settings` 或關鍵字，因為 Python 的 leave 路徑也不刪這些表。
 - 不含 `cold_group`、`cold_user`、`cold_omit`，也不讀 KV blob 或 `keywords_logs` 歷史 blob。
 - hydrate 進來的历史列也會被 upsert 一次；值本來就和 NAS 相同，重跑無害。`name`、`create_on`、`update_on` 為 NULL 時不會蓋掉 NAS 既有的值。
 - 讀取量等於匯出的列數。以近一年活躍量估算（約 80 個群組、2,600 筆成員、830 位使用者、少量設定與關鍵字變更）約 **4,000 列**，遠低於每日 5M rows read。

@@ -58,6 +58,7 @@ const EXPORT_SQL: Record<ExportTable, { from: string; columns: string }> = {
   user_keyword: { from: "user_keyword", columns: "id, author, keyword, reply, anchor" },
   keywords_logs: { from: "keywords_logs", columns: "_id, id, keyword, reply, create_on" },
   keyword_tombstone: { from: "keyword_tombstone", columns: "id, keyword" },
+  group_user_tombstone: { from: "group_user_tombstone", columns: "gid, uid" },
 };
 
 const CACHE_META_KEY = "keyword-probe-cache-meta";
@@ -946,11 +947,18 @@ export class SqliteBotRepository implements BotRepository {
 
   async deleteGroupUsers(groupId: string, userId: string | null): Promise<void> {
     this.cold.noteDelete(groupId, userId);
-    if (userId === null) {
-      this.storage.sql.exec("DELETE FROM group_user WHERE gid = ?", groupId);
-      return;
-    }
-    this.storage.sql.exec("DELETE FROM group_user WHERE gid = ? AND uid = ?", groupId, userId);
+    this.storage.transactionSync(() => {
+      if (userId === null) {
+        this.storage.sql.exec("DELETE FROM group_user WHERE gid = ?", groupId);
+      } else {
+        this.storage.sql.exec("DELETE FROM group_user WHERE gid = ? AND uid = ?", groupId, userId);
+      }
+      this.storage.sql.exec(
+        "INSERT INTO group_user_tombstone (gid, uid) VALUES (?, ?) ON CONFLICT(gid, uid) DO NOTHING",
+        groupId,
+        userId ?? "",
+      );
+    });
   }
 
   async fixtureSlices(): Promise<FixtureSlices> {
@@ -1470,6 +1478,11 @@ function writeTouch(sql: SqlStorage, input: TouchAndCount): void {
     source.groupId,
     uid,
     next,
+  );
+  sql.exec(
+    "DELETE FROM group_user_tombstone WHERE gid = ? AND (uid = ? OR uid = '')",
+    source.groupId,
+    uid,
   );
 }
 

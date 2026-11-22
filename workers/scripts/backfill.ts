@@ -32,6 +32,7 @@ export async function runBackfill(options: BackfillOptions): Promise<Record<Expo
     user_keyword: 0,
     keywords_logs: 0,
     keyword_tombstone: 0,
+    group_user_tombstone: 0,
   };
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -204,6 +205,17 @@ export function applyRows(db: DatabaseSync, table: ExportTable, rows: readonly R
           nullableText(row, "id"),
           text(row, "keyword"),
         );
+      }
+      return;
+    case "group_user_tombstone":
+      for (const row of rows) {
+        const gid = text(row, "gid");
+        const uid = text(row, "uid");
+        if (uid === "") {
+          db.prepare("DELETE FROM group_user WHERE COALESCE(gid, '') = ?").run(gid);
+        } else {
+          db.prepare("DELETE FROM group_user WHERE COALESCE(gid, '') = ? AND COALESCE(uid, '') = ?").run(gid, uid);
+        }
       }
       return;
   }
