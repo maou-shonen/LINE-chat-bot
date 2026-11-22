@@ -4,6 +4,7 @@ import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
 import { parseExportPage } from "./export-tables";
 import { IMPORT_SECRET_HEADER, importGate } from "./import-gate";
+import { NO_PHASES, PhaseTimer } from "./phases";
 import {
   parseKeywordDelete,
   parseKeywordLookup,
@@ -44,12 +45,28 @@ export const GLOBAL_BOT_STATE = "global";
 
 export class BotState extends DurableObject<Env> {
   private readonly repo: BotRepository;
+  private readonly timing: boolean;
 
   constructor(ctx: DurableObjectState, env: Env) {
+    const started = performance.now();
     super(ctx, env);
-    this.repo = new SqliteBotRepository(ctx.storage, ctx.id.name === COLD_BOT_STATE);
+    this.timing = String(env.PHASE_TIMING) === "1";
+    this.repo = new SqliteBotRepository(
+      ctx.storage,
+      ctx.id.name === COLD_BOT_STATE,
+      this.timing,
+    );
     ctx.blockConcurrencyWhile(async () => {
+      const migrateStarted = performance.now();
       await this.repo.migrate();
+      if (this.timing) {
+        const round = (ms: number) => Math.round(ms * 1000) / 1000;
+        console.log("phase", JSON.stringify({
+          op: "startup",
+          constructorMs: round(migrateStarted - started),
+          migrateMs: round(performance.now() - migrateStarted),
+        }));
+      }
     });
   }
 
@@ -219,9 +236,17 @@ export class BotState extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
+    const phases = this.timing ? new PhaseTimer(true) : NO_PHASES;
+    phases.start("pump");
     const moreCold = await this.repo.pumpHydration();
+    phases.end("pump");
+    phases.start("compact");
     const step = await this.repo.compactKeywordCache();
+    phases.end("compact");
+    phases.count("moreCold", moreCold ? 1 : 0);
+    phases.count("compactDone", step.done ? 1 : 0);
     if (moreCold || !step.done) await this.ctx.storage.setAlarm(Date.now() + 10);
+    phases.flush("alarm");
   }
 
   async recordMessage(input: unknown, now: unknown): Promise<void> {

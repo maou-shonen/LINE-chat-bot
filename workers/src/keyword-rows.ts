@@ -143,6 +143,238 @@ export function rowsForHits(
   return rows;
 }
 
+export interface KeywordMatchRows {
+  rows: KeywordRow[];
+  candidates: number;
+}
+
+/**
+ * Same candidate order as rowsForHits, but decodes only rows whose keyword can
+ * match the message. Exact, destar and wildcard checks are repeated later by
+ * matchKeyword; this only removes rows that cannot win.
+ */
+export function matchingRows(
+  table: KeywordStore,
+  message: string,
+  query: KeywordSelect,
+  hits: readonly string[],
+): KeywordMatchRows {
+  if (table.kind === "stored") return matchingStored(table, message, query, hits);
+  if (table.kind === "chunked") return matchingChunked(table, message, query, hits);
+  if (table.kind === "overlay") return matchingOverlay(table, message, query, hits);
+  const rows = rowsForHits(table, message, query, hits);
+  return { rows, candidates: rows.length };
+}
+
+function matchingStored(
+  table: StoredKeywordTable,
+  message: string,
+  query: KeywordSelect,
+  hits: readonly string[],
+): KeywordMatchRows {
+  if (message !== "" && !query.allReply) {
+    for (const index of keywordIndexes(table, message)) {
+      const row = readStoredRow(table, index);
+      if (!rowPasses(row, query)) continue;
+      return { rows: [row], candidates: 1 };
+    }
+  }
+  if (hits.length === 0) return { rows: [], candidates: 0 };
+  const found: number[] = [];
+  for (const hit of hits) {
+    const group = findGroup(table, hit);
+    if (group === null) continue;
+    for (let i = group.begin; i < group.end; i += 1) found.push(table.pool[i] ?? 0);
+  }
+  found.sort((left, right) => left - right);
+  let candidates = 0;
+  const rows: KeywordRow[] = [];
+  for (const index of found) {
+    if (query.scopeId !== null && !storedIdIs(table, index, query.scopeId)) continue;
+    candidates += 1;
+    if (!storedMayMatch(table, index, message)) continue;
+    rows.push(readMatchStoredRow(table, index));
+  }
+  return { rows, candidates };
+}
+
+function matchingChunked(
+  table: ChunkedKeywordTable,
+  message: string,
+  query: KeywordSelect,
+  hits: readonly string[],
+): KeywordMatchRows {
+  if (message !== "" && !query.allReply) {
+    for (const index of baseKeywordIndexes(table, message)) {
+      const row = baseReadRow(table, index);
+      if (!rowPasses(row, query)) continue;
+      return { rows: [row], candidates: 1 };
+    }
+  }
+  if (hits.length === 0) return { rows: [], candidates: 0 };
+  const found: number[] = [];
+  for (const hit of hits) pushBaseGroupRows(table, hit, found);
+  found.sort((left, right) => left - right);
+  let candidates = 0;
+  const rows: KeywordRow[] = [];
+  for (const index of found) {
+    if (query.scopeId !== null && !baseIdIs(table, index, query.scopeId)) continue;
+    candidates += 1;
+    if (!baseMayMatch(table, index, message)) continue;
+    rows.push(readMatchChunkedRow(table, index));
+  }
+  return { rows, candidates };
+}
+
+function matchingOverlay(
+  table: OverlayKeywordTable,
+  message: string,
+  query: KeywordSelect,
+  hits: readonly string[],
+): KeywordMatchRows {
+  if (message !== "" && !query.allReply) {
+    const rows = overlayRows(table, message, query, hits);
+    return { rows, candidates: rows.length };
+  }
+  if (hits.length === 0) return { rows: [], candidates: 0 };
+  const wanted = new Set(hits);
+  const found: number[] = [];
+  for (const hit of hits) pushBaseGroupRows(table.base, hit, found);
+  found.push(...appendedIndexes(table, (row) => wanted.has(row.anchor)));
+  found.sort((left, right) => left - right);
+  let candidates = 0;
+  const rows: KeywordRow[] = [];
+  for (const index of found) {
+    if (index < table.base.rowCount) {
+      const replaced = table.replaced.get(index);
+      if (replaced !== undefined) {
+        if (query.scopeId !== null && (replaced.id ?? "") !== query.scopeId) continue;
+        candidates += 1;
+        rows.push(replaced);
+        continue;
+      }
+      if (table.deleted.has(index)) continue;
+      if (query.scopeId !== null && !baseIdIs(table.base, index, query.scopeId)) continue;
+      candidates += 1;
+      if (!baseMayMatch(table.base, index, message)) continue;
+      rows.push(baseReadMatchRow(table.base, index));
+      continue;
+    }
+    const appended = table.appended[index - table.base.rowCount];
+    if (appended === null || appended === undefined) continue;
+    if (query.scopeId !== null && (appended.id ?? "") !== query.scopeId) continue;
+    candidates += 1;
+    // Appended rows are at most the delta limit; let matchKeyword filter them.
+    rows.push(appended);
+  }
+  return { rows, candidates };
+}
+
+function baseMayMatch(base: BaseKeywordTable, index: number, message: string): boolean {
+  if (base.kind === "stored") return storedMayMatch(base, index, message);
+  const packed = base.rowIndex.get(index);
+  if (packed === undefined) throw new Error("keyword chunk was not loaded");
+  const chunk = base.loaded.get(packed >>> CHUNK_LOCAL_SHIFT);
+  if (chunk === undefined) throw new Error("keyword chunk was not loaded");
+  return storedMayMatch(chunk, packed & CHUNK_LOCAL_MASK, message);
+}
+
+function storedMayMatch(table: StoredKeywordTable, index: number, message: string): boolean {
+  const base = index * ROW_STRIDE;
+  const off = table.rowMeta[base + 2] ?? 0;
+  const len = table.rowMeta[base + 3] ?? 0;
+  if (sameText(table.units, off, len, message)) return true;
+  if (!hasDoubleStar(table.units, off, len)) {
+    // Candidate groups come from an anchor that is in the message. For a
+    // keyword without **, that anchor is the whole keyword.
+    if (len === 0) return true;
+    return message.charCodeAt(0) === (table.units[off] ?? 0)
+      && message.charCodeAt(message.length - 1) === (table.units[off + len - 1] ?? 0);
+  }
+  if (withoutDoubleStarEqualsUnits(table.units, off, len, message)) return true;
+  return wildcardMatchUnits(table.units, off, len, message);
+}
+
+function hasDoubleStar(units: Uint16Array, off: number, len: number): boolean {
+  for (let i = 0; i < len - 1; i += 1) {
+    if (units[off + i] === 42 && units[off + i + 1] === 42) return true;
+  }
+  return false;
+}
+
+function withoutDoubleStarEqualsUnits(
+  units: Uint16Array,
+  off: number,
+  len: number,
+  message: string,
+): boolean {
+  let at = 0;
+  for (let i = 0; i < len;) {
+    if (units[off + i] === 42 && units[off + i + 1] === 42) {
+      i += 2;
+      continue;
+    }
+    if (at >= message.length || units[off + i] !== message.charCodeAt(at)) return false;
+    i += 1;
+    at += 1;
+  }
+  return at === message.length;
+}
+
+function wildcardMatchUnits(
+  units: Uint16Array,
+  off: number,
+  len: number,
+  message: string,
+): boolean {
+  const firstStar = findDoubleStar(units, off, off + len);
+  if (firstStar === -1) {
+    if (len === 0) return true;
+    const keyword = sliceText(units, off, len);
+    if (message.indexOf(keyword) === -1) return false;
+    return message[0] === keyword[0] && message[message.length - 1] === keyword[keyword.length - 1];
+  }
+  const first = firstStar;
+  const lastStar = findLastDoubleStar(units, off, off + len);
+  const last = lastStar === -1 ? off + len : lastStar + 2;
+  const firstText = sliceText(units, off, first - off);
+  const lastText = sliceText(units, last, off + len - last);
+  let kn = -1;
+  let start = off;
+  for (;;) {
+    const end = findDoubleStar(units, start, off + len);
+    const stop = end === -1 ? off + len : end;
+    const piece = sliceText(units, start, stop - start);
+    if (piece !== "") {
+      const found = message.indexOf(piece);
+      if (found > kn) kn = found;
+      else return false;
+    }
+    // The original rechecks the pins for every piece, including empty ones.
+    if (firstText !== "" && message[0] !== String.fromCharCode(units[off] ?? 0)) return false;
+    if (lastText !== "" && message[message.length - 1] !== String.fromCharCode(units[off + len - 1] ?? 0)) {
+      return false;
+    }
+    if (end === -1) break;
+    start = end + 2;
+  }
+  return true;
+}
+
+function findDoubleStar(units: Uint16Array, from: number, end: number): number {
+  for (let i = from; i < end - 1; i += 1) {
+    if (units[i] === 42 && units[i + 1] === 42) return i;
+  }
+  return -1;
+}
+
+function findLastDoubleStar(units: Uint16Array, from: number, end: number): number {
+  for (let i = end - 2; i >= from; i -= 1) {
+    if (units[i] === 42 && units[i + 1] === 42) return i;
+  }
+  return -1;
+}
+
 export function listKeywordTexts(table: KeywordStore, scopeId: string | null): string[] {
   const wanted = scopeId ?? "";
   const out: string[] = [];
@@ -391,9 +623,8 @@ function storedRows(
   found.sort((left, right) => left - right);
   const rows: KeywordRow[] = [];
   for (const index of found) {
-    const row = readStoredRow(table, index);
-    if (query.scopeId !== null && row.id !== query.scopeId) continue;
-    rows.push(row);
+    if (query.scopeId !== null && !storedIdIs(table, index, query.scopeId)) continue;
+    rows.push(readStoredRow(table, index));
   }
   return rows;
 }
@@ -471,6 +702,31 @@ function readStoredRow(table: StoredKeywordTable, index: number): KeywordRow {
   };
 }
 
+/** matchKeyword only reads keyword and reply; skip the other decoded fields. */
+function readMatchStoredRow(table: StoredKeywordTable, index: number): KeywordRow {
+  const base = index * ROW_STRIDE;
+  return {
+    id: null,
+    keyword: sliceText(table.units, table.rowMeta[base + 2] ?? 0, table.rowMeta[base + 3] ?? 0),
+    reply: sliceText(table.units, table.rowMeta[base + 4] ?? 0, table.rowMeta[base + 5] ?? 0),
+    anchor: "",
+    author: null,
+  };
+}
+
+function baseReadMatchRow(base: BaseKeywordTable, index: number): KeywordRow {
+  if (base.kind === "stored") return readMatchStoredRow(base, index);
+  return readMatchChunkedRow(base, index);
+}
+
+function readMatchChunkedRow(base: ChunkedKeywordTable, index: number): KeywordRow {
+  const packed = base.rowIndex.get(index);
+  if (packed === undefined) throw new Error("keyword chunk was not loaded");
+  const chunk = base.loaded.get(packed >>> CHUNK_LOCAL_SHIFT);
+  if (chunk === undefined) throw new Error("keyword chunk was not loaded");
+  return readMatchStoredRow(chunk, packed & CHUNK_LOCAL_MASK);
+}
+
 function chunkedRows(
   table: ChunkedKeywordTable,
   message: string,
@@ -486,13 +742,12 @@ function chunkedRows(
   }
   if (hits.length === 0) return [];
   const found: number[] = [];
-  for (const hit of hits) found.push(...baseGroupRows(table, hit));
+  for (const hit of hits) pushBaseGroupRows(table, hit, found);
   found.sort((left, right) => left - right);
   const rows: KeywordRow[] = [];
   for (const index of found) {
-    const row = baseReadRow(table, index);
-    if (query.scopeId !== null && row.id !== query.scopeId) continue;
-    rows.push(row);
+    if (query.scopeId !== null && !baseIdIs(table, index, query.scopeId)) continue;
+    rows.push(baseReadRow(table, index));
   }
   return rows;
 }
@@ -528,24 +783,21 @@ function baseField(base: BaseKeywordTable, index: number, slot: number): string 
   return storedField(chunk, packed & CHUNK_LOCAL_MASK, slot);
 }
 
-function baseGroupRows(base: BaseKeywordTable, anchor: string): number[] {
+function pushBaseGroupRows(base: BaseKeywordTable, anchor: string, rows: number[]): void {
   if (base.kind === "stored") {
     const group = findGroup(base, anchor);
-    if (group === null) return [];
-    const rows: number[] = [];
+    if (group === null) return;
     for (let i = group.begin; i < group.end; i += 1) rows.push(base.pool[i] ?? 0);
-    return rows;
+    return;
   }
-  if (anchor === "" && !base.emptyAnchor) return [];
+  if (anchor === "" && !base.emptyAnchor) return;
   const chunk = base.loaded.get(keywordChunk(anchor));
   if (chunk === undefined) throw new Error("keyword chunk was not loaded");
   const group = findGroup(chunk, anchor);
-  if (group === null) return [];
-  const rows: number[] = [];
+  if (group === null) return;
   for (let i = group.begin; i < group.end; i += 1) {
     rows.push(chunkRowOrdinal(chunk, chunk.pool[i] ?? 0));
   }
-  return rows;
 }
 
 function baseKeywordIndexes(base: BaseKeywordTable, keyword: string): number[] {
@@ -927,13 +1179,25 @@ function overlayRows(
   if (hits.length === 0) return [];
   const wanted = new Set(hits);
   const found: number[] = [];
-  for (const hit of hits) found.push(...baseGroupRows(table.base, hit));
+  for (const hit of hits) pushBaseGroupRows(table.base, hit, found);
   found.push(...appendedIndexes(table, (row) => wanted.has(row.anchor)));
   found.sort((left, right) => left - right);
   const rows: KeywordRow[] = [];
   for (const index of found) {
+    if (index < table.base.rowCount) {
+      const replaced = table.replaced.get(index);
+      if (replaced !== undefined) {
+        if (query.scopeId !== null && (replaced.id ?? "") !== query.scopeId) continue;
+      } else if (query.scopeId !== null && !baseIdIs(table.base, index, query.scopeId)) {
+        continue;
+      }
+    } else {
+      const appended = table.appended[index - table.base.rowCount];
+      if (appended === null || appended === undefined) continue;
+      if (query.scopeId !== null && (appended.id ?? "") !== query.scopeId) continue;
+    }
     const row = readOverlayRow(table, index);
-    if (row === null || (query.scopeId !== null && row.id !== query.scopeId)) continue;
+    if (row === null) continue;
     rows.push(row);
   }
   return rows;
@@ -966,6 +1230,12 @@ function writeUnits(units: Uint16Array, at: number, text: string): number {
 
 function sliceText(units: Uint16Array, at: number, length: number): string {
   if (length === 0) return "";
+  if (length === 1) return String.fromCharCode(units[at] ?? 0);
+  if (length <= 32) {
+    let text = "";
+    for (let i = 0; i < length; i += 1) text += String.fromCharCode(units[at + i] ?? 0);
+    return text;
+  }
   let text = "";
   for (let i = 0; i < length; i += 4096) {
     const end = Math.min(length, i + 4096);

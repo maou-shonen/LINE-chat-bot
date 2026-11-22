@@ -261,9 +261,9 @@ async function spyGets(stub: DurableObjectStub<BotState>): Promise<number> {
     const box = { n: 0 };
     (globalThis as unknown as { __benchGets: typeof box }).__benchGets = box;
     const get = state.storage.get.bind(state.storage);
-    state.storage.get = (async (key: string) => {
+    state.storage.get = (async (key: string | string[]) => {
       box.n += 1;
-      return get(key);
+      return (get as (key: string | string[]) => Promise<unknown>)(key);
     }) as typeof state.storage.get;
     return box.n;
   });

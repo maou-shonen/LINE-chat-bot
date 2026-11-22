@@ -253,20 +253,21 @@
 - 上傳的 550 MB RSS 是 4,717 個請求的瞬時峰值，不是常駐。
 - 還沒量：台北 08:00 後 workers.dev 的實際 rows written 與 GraphQL CPU；D1 與 DO 是否共用 100k 寫入額度；R2 啟用狀態。
 
-### v4：lazy row chunk（2026-11-22 晚，取代上表）
+### v4.1：lazy row chunk + phase timing（2026-11-22 深夜，取代上表）
 
- v3 的冷啟動一次 `get` 15.9 MB（automaton 1.29 MB 加 row table 14.6 MB），process CPU 50–60 ms、RSS +43 MB。v4 把 row table 拆成 8 個依 anchor hash 分區、可獨立解碼的 chunk，冷啟動只讀 meta、automaton、delta meta 三個 key；命中才平行讀需要的 chunk，並在記憶體快取。長訊息則把 UTF-16 取字串改成 `String.fromCharCode.apply` 分塊、`anchorOf` 與 `keywordLevel` 去掉展開配置、`matchKeyword` 不再對每個候選做 `replaceAll`。compaction 改成掃描、配置、填入、排序四段，每段有 1 ms 預算，最後一次換 meta。
+v3 的冷啟動一次 `get` 15.9 MB（automaton 1.29 MB 加 row table 14.6 MB），process CPU 50–60 ms、RSS +43 MB。v4 把 row table 拆成 8 個依 anchor hash 分區、可獨立解碼的 chunk，冷啟動只讀 meta、automaton、delta meta；命中才讀需要的 chunk，並在記憶體快取。v4.1 再把 meta 與 delta meta 合成一次 multi-get、row chunk 也一次 multi-get，快取同一訊息的 anchor hits，長訊息只解碼可能命中的列（這份語料 1591 候選降到 467 列）。
 
-| 項目 | v4 | v3 |
+| 項目 | v4.1 | v3 |
 |---|---|---|
 | 關鍵字 blob | 10 個 key，16,077,526 bytes（meta 361 bytes 另計）；8 個 row chunk，最大 1,987,892 bytes | 15 個 key，15,873,772 bytes |
-| 冷啟動 `get` | 3（meta、aho、delta meta） | 16 |
+| 冷啟動 `get` | 2（meta+delta meta、aho） | 16 |
 | 冷啟動 decode | 0 ms | 2–4 ms |
-| 冷啟動第一則私訊 | wall 14.5–17.7 ms；process CPU 0–20 ms；RSS +7.0–11.4 MB | wall 43.9–48.1 ms；CPU 50–60 ms；RSS +42.8–44.0 MB |
-| 5000 字真實語料，暖 | p50 3 ms、p95 4 ms；scan 1、fetch 2、match 1 ms | 約 30 ms（Cloudflare，扣冷啟動） |
-| 5000 字真實語料，冷 | p50 18 ms、p95 24 ms（讀完 8 個 chunk、14.8 MB） | 未量 |
-| compaction 單段 | 最大 3 ms（偶發 13 ms wall 尖峰），50,929 列約 280–293 段 | 最大 3 ms |
+| 冷啟動第一則私訊 | wall 15.1–18.3 ms；process CPU 20 ms；RSS +8.0–12.4 MB | wall 43.9–48.1 ms；CPU 50–60 ms；RSS +42.8–44.0 MB |
+| 5000 字真實語料，暖 | p50 3 ms、p95 4 ms；scan 1、fetch 2、match 1 ms；完整 callback 6.9–8.5 ms | 約 30 ms（Cloudflare，扣冷啟動） |
+| 5000 字真實語料，冷 | p50 17 ms、p95 21 ms（讀完 8 個 chunk、14.8 MB） | 未量 |
+| compaction 單段 | 最大 3–4 ms（偶發 13 ms wall 尖峰），50,929 列約 235–293 段 | 最大 3 ms |
 | 上傳 | 4,712 個 blob key、50,968,114 bytes；build 的 puts 是 4,713（含 manifest），只重傳有變動的 11 個 put | 4,718 個 put |
 
-限制：workerd 的 process CPU 解析度是 10 ms，冷啟動 0–20 ms 只能說接近或低於 10 ms；冷啟動後第一則若本身就是 5000 字且命中大量 anchor，仍需讀完所有 row chunk，這是 lazy chunk 的資料量下限。完整表格與重跑指令見 `workers/bench/RESULTS.md` 的「Option C v4」。
+`PHASE_TIMING=1` 時 DO 會印 `phase {json}`，只有固定名稱、毫秒與計數。本機樣本：`startup` constructor 0 ms、migrate 0–1 ms；`cacheLoad` coldGet 2–3 ms、aho get 1–2 ms、decode 0 ms；冷短訊息 `callback.total` 9–12 ms；冷長訊息 27 ms（chunk multi-get 18–19 ms、decode 0、match 1）；暖長訊息 3–4 ms（rowsGet 2–3、match 0–1、2 次 probe）。分段點在 I/O 邊界；Cloudflare 的 `Date.now()` 在同步 CPU 期間不會前進，這些 span 是 wall/I/O 邊界，不是純 CPU，CPU 仍要看 `wrangler tail` 的 `cpuTime`。
 
+限制：workerd 的 process CPU 解析度是 10 ms，冷啟動 10–30 ms 只能說約 1–3 個 tick；模組初始化在 workerd 的 `Date.now()` 下不可觀測。冷啟動後第一則若本身就是 5000 字且命中大量 anchor，仍需讀完所有 row chunk，這是 lazy chunk 的資料量下限。暖 miss 的 9–18 ms 尖峰在本機沒有重現，需在 CF 上用 phase 行定位。完整表格、phase 欄位與重跑指令見 `workers/bench/RESULTS.md` 的「Option C v4.1」。

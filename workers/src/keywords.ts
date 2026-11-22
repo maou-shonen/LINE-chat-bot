@@ -36,6 +36,8 @@ export interface KeywordSelect {
   excludeUrl: boolean;
   stripName: boolean;
   rng: RngOp[];
+  /** Internal fast path: message already went through normalizeKeywordMessage. */
+  preNormalized?: boolean;
 }
 
 export interface KeywordSelectResult {
@@ -183,9 +185,7 @@ export function matchKeyword(
   flags: { allReply: boolean; excludeUrl: boolean },
   rng: KeywordRng,
 ): string | null {
-  const keys: Array<[string, string]> = [];
   const exact: string[] = [];
-
   for (const row of rows) {
     let reply = row.reply;
     if (reply.startsWith("@")) {
@@ -193,32 +193,50 @@ export function matchKeyword(
       reply = reply.slice(1);
     }
     if (flags.excludeUrl && reply.includes("https:")) continue;
-
     if (row.keyword === message) {
       if (flags.allReply) exact.push(reply);
       else return reply;
-    } else if (row.keyword.includes("**") && row.keyword.replaceAll("**", "") === message) {
+    } else if (row.keyword.includes("**") && withoutDoubleStarEquals(row.keyword, message)) {
       exact.push(reply);
-    } else if (!flags.allReply || codePointLength(reply) > 1) {
-      keys.push([row.keyword, reply]);
     }
   }
-
   if (exact.length > 0) return rng.choice(exact);
 
   let bestLevel = -99;
-  const byLevel = new Map<number, string[]>();
-  for (const [keyword, reply] of keys) {
-    if (!wildcardMatch(keyword, message)) continue;
-    const level = keywordLevel(keyword);
-    const bucket = byLevel.get(level);
-    if (bucket === undefined) byLevel.set(level, [reply]);
-    else bucket.push(reply);
-    if (level > bestLevel) bestLevel = level;
+  let winners: string[] = [];
+  for (const row of rows) {
+    let reply = row.reply;
+    if (reply.startsWith("@")) {
+      if (flags.allReply) continue;
+      reply = reply.slice(1);
+    }
+    if (flags.excludeUrl && reply.includes("https:")) continue;
+    if (flags.allReply && reply.length <= 2 && codePointLength(reply) <= 1) continue;
+    if (!wildcardMatch(row.keyword, message)) continue;
+    const level = keywordLevel(row.keyword);
+    if (level > bestLevel) {
+      bestLevel = level;
+      winners = [reply];
+    } else if (level === bestLevel) {
+      winners.push(reply);
+    }
   }
-  const winners = byLevel.get(bestLevel);
-  if (winners === undefined) return null;
+  if (winners.length === 0) return null;
   return rng.choice(winners);
+}
+
+function withoutDoubleStarEquals(keyword: string, message: string): boolean {
+  let at = 0;
+  for (let i = 0; i < keyword.length;) {
+    if (keyword.charCodeAt(i) === 42 && keyword.charCodeAt(i + 1) === 42) {
+      i += 2;
+      continue;
+    }
+    if (at >= message.length || keyword.charCodeAt(i) !== message.charCodeAt(at)) return false;
+    i += 1;
+    at += 1;
+  }
+  return at === message.length;
 }
 
 export function shapeKeywordReply(reply: string, message: string, rng: KeywordRng): string[] {
@@ -274,8 +292,15 @@ function drawCount(message: string): number {
 }
 
 function keywordLevel(keyword: string): number {
+  let pairs = 0;
+  for (let i = 0; i < keyword.length - 1; i += 1) {
+    if (keyword.charCodeAt(i) === 42 && keyword.charCodeAt(i + 1) === 42) {
+      pairs += 1;
+      i += 1;
+    }
+  }
   return codePointLength(keyword)
-    - (keyword.split("**").length - 1)
+    - pairs
     - (keyword.startsWith("**") ? 2 : 0)
     - (keyword.endsWith("**") ? 2 : 0);
 }
