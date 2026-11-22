@@ -2,12 +2,8 @@ import { BlobPutError, COLD_BOT_STATE, parseBlobPut } from "./blob-store";
 import { handleCallback, type DispatchEnv } from "./dispatch";
 import { applyCountMessage } from "./handler";
 import { DurableObject } from "cloudflare:workers";
-import {
-  IMPORT_SECRET_HEADER,
-  ImportBatchError,
-  importGate,
-  parseImportBatch,
-} from "./import-plan";
+import { parseExportPage } from "./export-tables";
+import { IMPORT_SECRET_HEADER, importGate } from "./import-gate";
 import {
   parseKeywordDelete,
   parseKeywordLookup,
@@ -46,17 +42,6 @@ import {
 
 export const GLOBAL_BOT_STATE = "global";
 
-function parsedBatch(payload: unknown): ReturnType<typeof parseImportBatch> | Response {
-  try {
-    return parseImportBatch(payload);
-  } catch (error) {
-    if (error instanceof ImportBatchError) {
-      return new Response("invalid batch", { status: 400 });
-    }
-    throw error;
-  }
-}
-
 export class BotState extends DurableObject<Env> {
   private readonly repo: BotRepository;
 
@@ -70,11 +55,11 @@ export class BotState extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "POST" && url.pathname === "/import") {
-      return this.importRequest(request);
-    }
     if (request.method === "POST" && url.pathname === "/import/kv") {
       return this.importKv(request);
+    }
+    if (request.method === "POST" && url.pathname === "/export") {
+      return this.exportRequest(request);
     }
     if (request.method === "POST" && url.pathname.startsWith("/callback/")) {
       await handleCallback(this.repo, request, this.env as unknown as DispatchEnv);
@@ -89,7 +74,7 @@ export class BotState extends DurableObject<Env> {
     });
   }
 
-  private async importRequest(request: Request): Promise<Response> {
+  private async exportRequest(request: Request): Promise<Response> {
     const presented = request.headers.get(IMPORT_SECRET_HEADER);
     const gate = importGate(this.env.IMPORT_SECRET, presented);
     if (gate === "disabled") return new Response("not found", { status: 404 });
@@ -98,16 +83,15 @@ export class BotState extends DurableObject<Env> {
     try {
       payload = await request.json();
     } catch {
-      return new Response("invalid batch", { status: 400 });
+      return new Response("invalid export page", { status: 400 });
     }
-    const batch = parsedBatch(payload);
-    if (batch instanceof Response) return batch;
     try {
-      const result = await this.repo.importKeywordBatch(batch);
+      const page = parseExportPage(payload);
+      const result = await this.repo.exportPage(page.table, page.after, page.limit);
       return Response.json(result);
     } catch (error) {
-      if (error instanceof TypeError) throw error;
-      return new Response("batch rejected", { status: 409 });
+      if (error instanceof TypeError) return new Response("invalid export page", { status: 400 });
+      throw error;
     }
   }
 

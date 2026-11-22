@@ -13,8 +13,7 @@ import {
 } from "./counts";
 import { ahoHits, buildAho, decodeAho, encodeAho, startAhoBuild, stepAhoBuild, type AhoBuild, type AhoMachine } from "./aho";
 import { Hydrator } from "./hydrate";
-import { applyImportBatch } from "./import-apply";
-import { type ApplyResult, type ImportBatch } from "./import-plan";
+import { EXPORT_TABLES, type ExportPage, type ExportTable } from "./export-tables";
 import { renderReply } from "./gacha";
 import {
   anchorOf,
@@ -47,6 +46,19 @@ import {
   type KeywordTable,
   type RowDeltaOp,
 } from "./keyword-rows";
+
+const EXPORT_SQL: Record<ExportTable, { from: string; columns: string }> = {
+  user: { from: "user", columns: "id, name, create_on, update_on" },
+  group: {
+    from: '"group"',
+    columns: "id, _id, _count, _setting, _admin, create_on, update_on",
+  },
+  group_user: { from: "group_user", columns: "gid, uid, _count, _setting" },
+  user_settings: { from: "user_settings", columns: "group_id, user_id, options" },
+  user_keyword: { from: "user_keyword", columns: "id, author, keyword, reply, anchor" },
+  keywords_logs: { from: "keywords_logs", columns: "_id, id, keyword, reply, create_on" },
+  keyword_tombstone: { from: "keyword_tombstone", columns: "id, keyword" },
+};
 
 const CACHE_META_KEY = "keyword-probe-cache-meta";
 const ROW_META_KEY = "keyword-row-cache-meta";
@@ -81,7 +93,7 @@ export interface BotRepository {
   getKeyword(input: KeywordLookup): Promise<string | null>;
   listKeywords(scopeId: string | null): Promise<string[]>;
   inspectKeywords(): Promise<KeywordSnapshot>;
-  importKeywordBatch(batch: ImportBatch): Promise<ApplyResult>;
+  exportPage(table: ExportTable, after: number, limit: number): Promise<ExportPage>;
   keywordRows(query: KeywordSelect): Promise<KeywordRow[]>;
   measureKeywordRender(query: KeywordSelect, rounds: number): Promise<KeywordMeasure>;
   measureColdRender(query: KeywordSelect, rounds: number): Promise<ColdKeywordMeasure>;
@@ -774,45 +786,17 @@ export class SqliteBotRepository implements BotRepository {
           input.now,
         );
       }
+      if (this.coldMode) {
+        this.storage.sql.exec(
+          "DELETE FROM keyword_tombstone WHERE id = ? AND keyword = ?",
+          input.scopeId ?? "",
+          input.keyword,
+        );
+      }
       wrote = { op: "put", id: input.scopeId ?? "", keyword: input.keyword, reply };
     });
     if (wrote !== null) await this.noteKeywordOps(cache, [wrote]);
     return status;
-  }
-
-  async importKeywordBatch(batch: ImportBatch): Promise<ApplyResult> {
-    const cache = await this.readyCache(false);
-    const result = this.storage.transactionSync(() => applyImportBatch(this.storage.sql, batch));
-    if (result.duplicate) return result;
-    const ops: RowDeltaOp[] = [];
-    for (const row of batch.rows) {
-      if (row.table !== "user_keyword") continue;
-      const keyword = row.values.keyword;
-      const reply = row.values.reply;
-      const id = row.values.id;
-      if (typeof keyword !== "string" || typeof reply !== "string") continue;
-      const scope = typeof id === "string" ? id : "";
-      const anchor = anchorOf(keyword);
-      if (row.values.anchor !== anchor) {
-        if (scope === "") {
-          this.storage.sql.exec(
-            "UPDATE user_keyword SET anchor = ? WHERE id IS NULL AND keyword = ?",
-            anchor,
-            keyword,
-          );
-        } else {
-          this.storage.sql.exec(
-            "UPDATE user_keyword SET anchor = ? WHERE id = ? AND keyword = ?",
-            anchor,
-            scope,
-            keyword,
-          );
-        }
-      }
-      ops.push({ op: "put", id: scope, keyword, reply });
-    }
-    if (ops.length > 0) await this.noteKeywordOps(cache, ops);
-    return result;
   }
 
   private async deleteStoredKeyword(input: KeywordDelete): Promise<KeywordDeleteStatus> {
@@ -831,6 +815,13 @@ export class SqliteBotRepository implements BotRepository {
         this.storage.sql.exec("DELETE FROM user_keyword WHERE _id = ?", sqlRow.id);
       }
       status = "deleted";
+      if (this.coldMode) {
+        this.storage.sql.exec(
+          "INSERT INTO keyword_tombstone (id, keyword) VALUES (?, ?) ON CONFLICT(id, keyword) DO NOTHING",
+          input.scopeId ?? "",
+          input.keyword,
+        );
+      }
       wrote = { op: "del", id: input.scopeId ?? "", keyword: input.keyword, reply: "" };
     });
     if (wrote !== null) await this.noteKeywordOps(cache, [wrote]);
@@ -871,6 +862,24 @@ export class SqliteBotRepository implements BotRepository {
       });
     });
     return { keywords, logs: readKeywordLogs(this.storage.sql) };
+  }
+
+  async exportPage(table: ExportTable, after: number, limit: number): Promise<ExportPage> {
+    const spec = EXPORT_SQL[table];
+    const raw = this.storage.sql
+      .exec(
+        `SELECT rowid AS __row, ${spec.columns} FROM ${spec.from} WHERE rowid > ? ORDER BY rowid LIMIT ?`,
+        after,
+        limit,
+      )
+      .toArray();
+    const rows = raw.map((row) => {
+      const copy = { ...row };
+      delete copy.__row;
+      return copy;
+    });
+    const last = raw[raw.length - 1]?.__row;
+    return { rows, next: raw.length === limit && typeof last === "number" ? last : null };
   }
 
   async userName(id: string): Promise<string | null> {
