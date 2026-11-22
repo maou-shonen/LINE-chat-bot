@@ -383,9 +383,26 @@ npm run bench
 - 沒有孤兒 key 要刪。rows 0–7 同名覆寫，rows 8–63 新增，KV 端沒有舊 key 需要刪除端點。
 - 部署順序：先上讀取端（能依 meta 讀 8 或 64 塊），再匯入 v5 blob。舊版程式讀到 64 塊的 meta 只會找 0–7 塊，會漏關鍵字。匯入期間 rows 0–7 會先被覆寫，meta 最後才翻，有即時流量時會有一個短暫漏字窗口。這次沒有 deploy，也沒有匯入 Cloudflare。
 
+## 預載
+
+`npm run bench:local` 加 `C_PHASE=1`、3 輪。冷啟動第一個請求後排一個 +50 ms alarm，每個 alarm 載 2 塊，直到 64 塊都載完。第一個請求本身仍同步載入命中的 1 塊。
+
+| 項目 | 數值 |
+|---|---|
+| alarm 段數（每輪） | 32 |
+| 每段 prefetch wall | 中位數 2 ms、max 5 ms |
+| 每段 prefetch 塊數 | 2（最後一段 1） |
+| 每段 prefetch bytes | 中位數 453,524、max 700,912 |
+| 每輪預載總量 | 63 塊、14,587,192 bytes |
+| 冷啟動取樣窗 process CPU（10 ms 解析度） | 190–200 ms，含 500 ms settle 內的 32 段 alarm |
+| 冷啟動取樣窗 RSS | +28.2–33.1 MB |
+
+預載完成後，同一輪的暖短訊息和 5000 字訊息 `chunksMissing` 都是 0。冷 5000 字 wall 從 38.9–41.6 ms 降到 10.3–11.9 ms，因為 500 ms 的 settle 足夠跑完 32 段；若長訊息在第一則後 50 ms 內到達，仍要同步載入缺塊。暖短訊息 wall 是 5.2–5.7 ms。冷啟動短訊息 wall 是 15.2–19.7 ms（上一輪 11.2–15.2 ms）；這一輪沒有單獨拆 `getAlarm`/`setAlarm` 的成本，差距含排程噪聲。
+
 ## 限制
 
-- 冷 5000 字變慢。320 個命中 anchor 落在 63/64 個分區，讀到 63 塊共 14.59 MB；v4 讀 7/8 塊共 12.89 MB。本機 wall 從 29.7–33.3 ms 升到 38.9–41.6 ms。
+- 冷啟動會預載全部 64 塊，RSS 多 28–33 MB，process CPU 在 32 段 alarm 內約 190–200 ms。要先確認 DO 記憶體與 CPU 預算可以接受，再開預載。
+- 預載完成前，冷 5000 字仍會變慢。320 個命中 anchor 落在 63/64 個分區，讀到 63 塊共 14.59 MB；v4 讀 7/8 塊共 12.89 MB。本機 wall 從 29.7–33.3 ms 升到 38.9–41.6 ms。
 - 冷長訊息要一次讀 64 塊。一次 multi-get 的冷 5000 字是 45–49 ms；先前每批 16 個 key 併發 4 次是 39–42 ms。CI 在併發版本掉過一次 chunk value（`keyword row chunk was missing`），本機重跑沒再現，已退回單次 get，短訊息不受影響。
 - `listKeywords`、`inspectKeywords` 冷啟動仍會載入全部 64 塊，沒有另外量。
 - 非 2 的次方的 `rowChunks` 會被 meta 驗證拒絕，當成沒有 cache。
