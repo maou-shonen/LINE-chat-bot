@@ -29,8 +29,8 @@ const PAGES: Record<ExportTable, Record<string, unknown>[]> = {
     { id: "G2", _id: "uuid2", _count: '{"對話": 1}', _setting: "{}", _admin: "{}", create_on: "2024-06-01 00:00:00", update_on: "2024-06-01 00:00:00" },
   ],
   group_user: [
-    { gid: "G1", uid: "U1", _count: '{"對話": 3}', _setting: "{}" },
     { gid: "G2", uid: "U2", _count: '{"對話": 1}', _setting: "{}" },
+    { gid: "G4", uid: "U4", _count: '{"對話": 2}', _setting: "{}" },
   ],
   user_settings: [{ group_id: "G1", user_id: "U1", options: '{"全回應": false}' }],
   user_keyword: [
@@ -43,6 +43,10 @@ const PAGES: Record<ExportTable, Record<string, unknown>[]> = {
   keyword_tombstone: [
     { id: "G1", keyword: "kdel" },
     { id: null, keyword: "gdel" },
+  ],
+  group_user_tombstone: [
+    { gid: "G1", uid: "U1" },
+    { gid: "G3", uid: "" },
   ],
 };
 
@@ -72,6 +76,7 @@ describe("backfill apply", () => {
       user_keyword: 2,
       keywords_logs: 1,
       keyword_tombstone: 2,
+      group_user_tombstone: 2,
     });
 
     const after = new DatabaseSync(path);
@@ -89,10 +94,29 @@ describe("backfill apply", () => {
       assert.equal(g1?.update_on, "2024-06-01 00:00:00");
       assert.equal(after.prepare('SELECT _count FROM "group" WHERE id = ?').get("G9")?._count, '{"舊":1}');
 
-      assert.equal(after.prepare("SELECT _id FROM group_user WHERE gid = 'G1'").get()?._id, before.member);
-      assert.equal(after.prepare("SELECT _count FROM group_user WHERE gid = 'G1'").get()?._count, '{"對話": 3}');
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM group_user WHERE COALESCE(gid, '') = 'G1'").get()?.n, 0);
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM group_user WHERE COALESCE(gid, '') = 'G3'").get()?.n, 0);
+      assert.equal(
+        after.prepare("SELECT _count FROM group_user WHERE COALESCE(gid, '') = 'G2' AND COALESCE(uid, '') = 'U2'").get()
+          ?._count,
+        '{"對話": 1}',
+      );
+      assert.equal(
+        after.prepare("SELECT _id FROM group_user WHERE COALESCE(gid, '') = 'G4' AND COALESCE(uid, '') = 'U4'").get()
+          ?._id,
+        before.member,
+      );
+      assert.equal(
+        after.prepare("SELECT _count FROM group_user WHERE COALESCE(gid, '') = 'G4' AND COALESCE(uid, '') = 'U4'").get()
+          ?._count,
+        '{"對話": 2}',
+      );
       assert.equal(after.prepare("SELECT COUNT(*) AS n FROM group_user").get()?.n, 3);
-      assert.equal(after.prepare("SELECT _count FROM group_user WHERE gid = 'G9'").get()?._count, '{"舊":1}');
+      assert.equal(
+        after.prepare("SELECT _count FROM group_user WHERE COALESCE(gid, '') = 'G9' AND COALESCE(uid, '') = 'U9'").get()
+          ?._count,
+        '{"舊":1}',
+      );
 
       assert.equal(after.prepare("SELECT _id FROM user_settings WHERE group_id = 'G1'").get()?._id, before.settings);
       assert.equal(after.prepare("SELECT options FROM user_settings WHERE group_id = 'G1'").get()?.options, '{"全回應": false}');
@@ -119,6 +143,16 @@ describe("backfill apply", () => {
       assert.equal(again.prepare("SELECT COUNT(*) AS n FROM user").get()?.n, 3);
       assert.equal(again.prepare("SELECT COUNT(*) AS n FROM user_keyword").get()?.n, 3);
       assert.equal(again.prepare("SELECT _id FROM user_keyword WHERE keyword = 'kbase'").get()?._id, before.keyword);
+      assert.equal(again.prepare("SELECT COUNT(*) AS n FROM group_user").get()?.n, 3);
+      assert.equal(
+        again.prepare("SELECT COUNT(*) AS n FROM group_user WHERE COALESCE(gid, '') IN ('G1', 'G3')").get()?.n,
+        0,
+      );
+      assert.equal(
+        again.prepare("SELECT _id FROM group_user WHERE COALESCE(gid, '') = 'G4' AND COALESCE(uid, '') = 'U4'").get()
+          ?._id,
+        before.member,
+      );
     } finally {
       again.close();
     }
@@ -189,6 +223,24 @@ function seed(db: DatabaseSync): void {
     "{}",
   );
   db.prepare("INSERT INTO group_user (gid, uid, _count, _setting) VALUES (?, ?, ?, ?)").run(
+    "G3",
+    "U3",
+    '{"舊":1}',
+    "{}",
+  );
+  db.prepare("INSERT INTO group_user (gid, uid, _count, _setting) VALUES (?, ?, ?, ?)").run(
+    "G3",
+    "U4",
+    '{"舊":1}',
+    "{}",
+  );
+  db.prepare("INSERT INTO group_user (gid, uid, _count, _setting) VALUES (?, ?, ?, ?)").run(
+    "G4",
+    "U4",
+    '{"舊":1}',
+    "{}",
+  );
+  db.prepare("INSERT INTO group_user (gid, uid, _count, _setting) VALUES (?, ?, ?, ?)").run(
     "G9",
     "U9",
     '{"舊":1}',
@@ -236,7 +288,9 @@ function seed(db: DatabaseSync): void {
 
 function ids(db: DatabaseSync): { member: number; settings: number; keyword: number } {
   return {
-    member: Number(db.prepare("SELECT _id FROM group_user WHERE gid = 'G1'").get()?._id),
+    member: Number(
+      db.prepare("SELECT _id FROM group_user WHERE COALESCE(gid, '') = 'G4' AND COALESCE(uid, '') = 'U4'").get()?._id,
+    ),
     settings: Number(db.prepare("SELECT _id FROM user_settings WHERE group_id = 'G1'").get()?._id),
     keyword: Number(db.prepare("SELECT _id FROM user_keyword WHERE keyword = 'kbase'").get()?._id),
   };

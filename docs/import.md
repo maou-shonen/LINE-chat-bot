@@ -70,4 +70,4 @@ IMPORT_SECRET="$(cat /dev/stdin)" npm run backfill -- \
   --sqlite /path/to/line.db
 ```
 
-工具在同一個 transaction 內 upsert，重跑安全；`keyword_tombstone` 會刪除 NAS 上的關鍵字。細節與風險見 [cutover.md](cutover.md) 第 4 節。
+工具在同一個 transaction 內 upsert，重跑安全；`keyword_tombstone` 會刪除 NAS 上的關鍵字，`group_user_tombstone` 會刪除 NAS 上對應的 `group_user` 列（`uid = ''` 代表整個群組的成員列）。細節與風險見 [cutover.md](cutover.md) 第 4 節。
