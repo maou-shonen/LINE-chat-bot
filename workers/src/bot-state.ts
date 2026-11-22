@@ -43,15 +43,9 @@ import {
 
 export const GLOBAL_BOT_STATE = "global";
 
-const KEEPALIVE_INTERVAL_MS = 60_000;
-const KEEPALIVE_WINDOW_MS = 30 * 60_000;
-
 export class BotState extends DurableObject<Env> {
   private readonly repo: BotRepository;
   private readonly timing: boolean;
-  // Memory only: a fresh instance has no traffic until a request arrives, so an
-  // alarm-only wake stops renewing the keep-alive.
-  private lastTrafficAt: number | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     const started = performance.now();
@@ -78,7 +72,6 @@ export class BotState extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
-    this.noteTraffic();
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/import/kv") {
       return this.importKv(request);
@@ -243,15 +236,6 @@ export class BotState extends DurableObject<Env> {
     return this.repo.pumpHydration();
   }
 
-  private noteTraffic(): void {
-    this.lastTrafficAt = Date.now();
-    this.ctx.waitUntil(this.keepAlive());
-  }
-
-  private async keepAlive(): Promise<void> {
-    await this.repo.scheduleAlarmNoLaterThan(Date.now() + KEEPALIVE_INTERVAL_MS);
-  }
-
   async alarm(): Promise<void> {
     const phases = this.timing ? new PhaseTimer(true) : NO_PHASES;
     phases.start("pump");
@@ -267,16 +251,11 @@ export class BotState extends DurableObject<Env> {
     phases.end("prefetch");
     phases.count("prefetchChunks", prefetch.chunks);
     phases.count("prefetchBytes", prefetch.bytes);
-    if (moreCold || !step.done || prefetch.more) {
-      await this.ctx.storage.setAlarm(Date.now() + 10);
-    } else if (this.lastTrafficAt !== null && Date.now() - this.lastTrafficAt < KEEPALIVE_WINDOW_MS) {
-      await this.ctx.storage.setAlarm(Date.now() + KEEPALIVE_INTERVAL_MS);
-    }
+    if (moreCold || !step.done || prefetch.more) await this.ctx.storage.setAlarm(Date.now() + 10);
     phases.flush("alarm");
   }
 
   async recordMessage(input: unknown, now: unknown): Promise<void> {
-    this.noteTraffic();
     await applyCountMessage(this.repo, input, now);
   }
 

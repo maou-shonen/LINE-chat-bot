@@ -17,7 +17,6 @@ export class Hydrator {
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly enabled: boolean,
-    private readonly schedule: (target: number) => Promise<void>,
   ) {}
 
   async beforeUser(id: string): Promise<void> {
@@ -216,7 +215,7 @@ export class Hydrator {
       }
     });
     const after = this.readGroup(groupId);
-    if (after !== null && !after.done) await this.schedule(Date.now() + 10);
+    if (after !== null && !after.done) await this.storage.setAlarm(Date.now() + 10);
   }
 
   private insertMembers(groupId: string, members: readonly GroupBlobUser[], omit: Set<string>): void {

@@ -207,68 +207,6 @@ describe("keyword chunk prefetch", () => {
     expect(after.rowChunksLoaded - before.rowChunksLoaded).toBe(1);
   });
 
-  it("keeps the earlier alarm when keep-alive and prefetch schedule at once", async () => {
-    const prefix = "pk";
-    const state: DurableObjectStub<BotState> = env.BOT_STATE.get(
-      env.BOT_STATE.idFromName(`prefetch-k-${crypto.randomUUID()}`),
-    );
-    await state.putKeywords(rows(prefix, 48));
-    await finish(state);
-
-    const seen = await runInDurableObject(state, async (instance: BotState, ctx) => {
-      await ctx.storage.deleteAlarm();
-      const getAlarm = ctx.storage.getAlarm.bind(ctx.storage);
-      const setAlarm = ctx.storage.setAlarm.bind(ctx.storage);
-      let release = () => {};
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      let firstGet = () => {};
-      const firstGetP = new Promise<void>((resolve) => {
-        firstGet = resolve;
-      });
-      let gets = 0;
-      const sets: number[] = [];
-      let secondSet = () => {};
-      const secondSetP = new Promise<void>((resolve) => {
-        secondSet = resolve;
-      });
-      const startedAt = Date.now();
-      // Both schedulers read the same empty slot, so only the chain decides the winner.
-      ctx.storage.getAlarm = async () => {
-        gets += 1;
-        if (gets === 1) {
-          firstGet();
-          await gate;
-        }
-        return null;
-      };
-      ctx.storage.setAlarm = async (at: number) => {
-        sets.push(at);
-        if (sets.length === 2) secondSet();
-        return setAlarm(at);
-      };
-      await instance.fetch(new Request("https://example.test/ping", { method: "POST" }));
-      await firstGetP;
-      await instance.measureKeywordWrite({
-        op: "put",
-        id: "g",
-        keyword: `zz${prefix}race`,
-        reply: "r",
-        cold: true,
-      });
-      for (let turn = 0; turn < 50 && sets.length === 0; turn += 1) await Promise.resolve();
-      release();
-      await secondSetP;
-      return { sets, alarm: await getAlarm(), startedAt };
-    });
-
-    expect(seen.sets).toHaveLength(2);
-    expect(seen.sets[0] ?? 0).toBeGreaterThan(seen.startedAt + 55_000);
-    expect(seen.sets[1] ?? 0).toBeLessThan(seen.startedAt + 5_000);
-    expect(seen.alarm).toBe(seen.sets[1]);
-  });
-
   it("keeps replies equal to sql while prefetch runs", async () => {
     const prefix = "pb";
     const state: DurableObjectStub<BotState> = env.BOT_STATE.get(
