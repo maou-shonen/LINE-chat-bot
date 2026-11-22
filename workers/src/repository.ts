@@ -896,6 +896,9 @@ export class SqliteBotRepository implements BotRepository {
       if (job.deletedTo < job.deltaBase || performance.now() - started >= budgetMs) return false;
     }
     if (!job.flipped) {
+      if (job.rowAt !== KEYWORD_CHUNK_COUNT || job.base === null || job.base.loaded.size !== KEYWORD_CHUNK_COUNT) {
+        throw new Error(`compact chunk count mismatch rowAt=${job.rowAt} loaded=${job.base?.loaded.size}`);
+      }
       const meta: KeywordMeta = {
         version: KEYWORD_CACHE_VERSION,
         ahoGen: job.ahoGen,
