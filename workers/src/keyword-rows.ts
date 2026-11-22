@@ -51,8 +51,7 @@ export interface OverlayKeywordTable {
 
 export type KeywordStore = KeywordTable | StoredKeywordTable | ChunkedKeywordTable | OverlayKeywordTable;
 
-export const KEYWORD_CHUNK_BITS = 6;
-export const KEYWORD_CHUNK_COUNT = 1 << KEYWORD_CHUNK_BITS;
+export const KEYWORD_CHUNK_COUNT = 64;
 
 // v4 caches recorded 8 chunks; new blobs record 64. Follow the meta count so an
 // old cache stays readable after the upgrade.

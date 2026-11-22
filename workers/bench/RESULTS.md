@@ -370,10 +370,10 @@ npm run bench
 
 | 項目 | 8 塊 | 64 塊 |
 |---|---|---|
-| compaction 段數 | 280–293 | 325–349 |
+| compaction 段數 | 280–293 | 325–364 |
 | 單段 max | 3 ms | 2.00 ms |
 
-64 塊把一次 compaction 拆成更多段，每段更小。單段 max 2 ms，低於 10 ms 目標。合成 5000 字的冷 request p95（RENDER 與 COLD）是 10–12 ms，原本的 `< 12 ms` 斷言在機器忙時會偶發失敗。這是 wall proxy，不是 CI 的一部分。
+64 塊把一次 compaction 拆成更多段，每段更小。單段 max 2 ms，低於 10 ms 目標。合成 5000 字的冷 request p95（RENDER 與 COLD）是 10–13 ms。`probe.bench.ts` 的兩個冷 wall 門檻由 12 調到 15，反應 64 塊多出的 1–2 ms。
 
 ## 建置與 key 變動
 
@@ -385,8 +385,8 @@ npm run bench
 
 ## 限制
 
-- 冷 5000 字變慢。320 個命中 anchor 分散在 63/64 個分區，讀取量從 12.89 MB 升到 14.59 MB，本機 wall 從 29.7–33.3 ms 升到 38.9–41.6 ms。這是細分區在密集命中下的資料量下限，不是 probe 變慢。
-- 併發 16 個 key 的 multi-get 是本機量測後的選擇。8、16、32 三種 batch 在本機的冷 5000 字都是 40–42 ms，短訊息不受影響。
+- 冷 5000 字變慢。320 個命中 anchor 落在 63/64 個分區，讀到 63 塊共 14.59 MB；v4 讀 7/8 塊共 12.89 MB。本機 wall 從 29.7–33.3 ms 升到 38.9–41.6 ms。
+- multi-get 每批 16 個 key 併發（4 次）。一次讀完 64 塊時冷 5000 字是 45–49 ms，併發後 39–42 ms。8 與 32 的 batch 在本機沒有明顯差別，短訊息不受影響。
 - `listKeywords`、`inspectKeywords` 冷啟動仍會載入全部 64 塊，沒有另外量。
 - 非 2 的次方的 `rowChunks` 會被 meta 驗證拒絕，當成沒有 cache。
 

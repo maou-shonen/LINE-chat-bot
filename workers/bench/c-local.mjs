@@ -1,5 +1,5 @@
 // Measures the local Worker through wrangler dev. No Cloudflare request is made.
-// Real blobs come from C_BLOB_DIR (default /tmp/c-blob-build-v5); only aggregates print.
+// Real blobs come from C_BLOB_DIR; only aggregates print.
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";

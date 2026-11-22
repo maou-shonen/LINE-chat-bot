@@ -169,8 +169,10 @@ describe("keyword base blob", () => {
       { id: null, keyword: "gonly", reply: "global", author: null },
     ].map((row) => ({ ...row, anchor: anchorOf(row.keyword) }));
     const slots = Array.from({ length: 8 }, () => ({ rows: [] as typeof rows, ordinals: [] as number[] }));
+    const legacySlots = rows.map((row) => keywordChunk(row.anchor, 8));
+    expect(legacySlots).toEqual([1, 0, 1]);
     rows.forEach((row, ordinal) => {
-      const slot = slots[keywordChunk(row.anchor, 8)];
+      const slot = slots[legacySlots[ordinal] as number];
       if (slot === undefined) throw new Error("chunk out of range");
       slot.rows.push(row);
       slot.ordinals.push(ordinal);
