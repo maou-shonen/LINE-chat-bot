@@ -321,3 +321,83 @@ npm run bench
 
 結果只印列數、位元組和時間，不印訊息、名稱、關鍵字或 id。
 
+
+# Option C v5：row chunk 64 塊（2026-11-22）
+
+這一輪把關鍵字 row chunk 從 8 塊切成 64 塊，冷啟動短訊息只讀命中 anchor 的那一塊，不再讀 1.9 MB。格式仍是 version 4，meta 的 `rowChunks` 改成 64。
+
+## 格式
+
+- 66 個 key：`keyword-cache-meta`、`keyword-aho-1-0`（1,292,596 bytes，內容和 v4 相同）、`keyword-rows-1-0..63`。
+- row chunk 合計 14,786,050 bytes。最小 159,642、中位數 220,544、平均 231,032、最大 511,046 bytes。
+- 比 v4 多 1,120 bytes，是 56 個 20-byte header。
+- 重切驗證：50,929 列、50,929 個 ordinal、keyword hash 集合、anchor 分組大小都和 v4 相同。
+- `keywordChunk` 依 meta 的 chunk 數取 anchor hash 高位。舊的 8 塊 meta 用 3 bits 讀，新的 64 塊用 6 bits 讀，升級不用清 cache。
+- key 數 66，低於 `KEYWORD_BLOB_KEY_LIMIT` 128。allowlist 不用改。
+- 讀取時一次 multi-get 讀完缺少的 chunk（最多 64 個 key，低於 128 上限）。冷啟動短訊息只有 1 塊，仍是 1 次 get。
+
+## 冷啟動與長訊息
+
+`npm run bench:local`，同一份程式，只換 `C_BLOB_DIR`，每個設定 10 次 workerd 重啟（ABBA 兩輪，每輪 5 次）：
+
+| 項目 | 8 塊 v4 blob | 64 塊 v5 blob |
+|---|---|---|
+| 冷啟動短訊息 wall | 14.2–19.7 ms | 11.2–15.2 ms |
+| 冷啟動短訊息 CPU（10 ms 解析度） | 10–30 ms | 0–20 ms |
+| 冷啟動短訊息 RSS | +7.1–14.7 MB | +4.5–7.1 MB |
+| 冷啟動短訊息讀取 | 1 塊 1,898,570 bytes | 1 塊 198,858 bytes |
+| 暖短訊息 wall | 4.1–5.7 ms | 4.2–6.5 ms |
+| 冷 5000 字 wall | 29.7–33.3 ms | 38.9–41.6 ms |
+| 冷 5000 字讀取 | 7 塊 12,886,360 bytes | 63 塊 14,587,192 bytes |
+| 暖 5000 字 wall | 6.4–7.8 ms | 6.5–7.6 ms |
+
+`chunkBytes` 是該次實際讀到的 bytes，不是檔案大小。短訊息只命中一個 anchor，落在哪一塊會決定單塊大小。
+
+`npm run bench:c`（miniflare、真實 blob、每次 3 輪，各跑 2 次）：
+
+| 項目 | 8 塊 | 64 塊 |
+|---|---|---|
+| 冷啟動 keyword key | 10 個、16,077,526 bytes | 66 個、16,078,646 bytes |
+| 每輪冷啟動 get | 2 | 2 |
+| 5000 字暖 p50 / p95 | 2–3 / 3–4 ms | 2 / 3 ms |
+| 5000 字冷 p50 | 18–19 ms | 22–23 ms |
+| 5000 字冷 p95 | 22 ms | 26–27 ms |
+| 5000 字冷 max | 24–26 ms | 28–29 ms |
+
+## Compaction
+
+`npm run bench`（合成 50,929 列、24,711 anchor）4 次：
+
+| 項目 | 8 塊 | 64 塊 |
+|---|---|---|
+| compaction 段數 | 280–293 | 325–364 |
+| 單段 max | 3 ms | 2.00 ms |
+
+64 塊把一次 compaction 拆成更多段，每段更小。單段 max 2 ms，低於 10 ms 目標。合成 5000 字的冷 request p95（RENDER 與 COLD）是 10–13 ms。`probe.bench.ts` 的兩個冷 wall 門檻由 12 調到 15，反應 64 塊多出的 1–2 ms。
+
+## 建置與 key 變動
+
+- 新 build 在 `/tmp/c-blob-build-v5`，4,769 個 put（含 `c-manifest`），keywordKeys 66、keywordBytes 16,078,646。
+- 和 v4 比：`keyword-aho-1-0` 內容相同；9 個 key 內容改變（meta 加 rows 0–7）；56 個新 key（rows 8–63）；0 個 key 移除。
+- 只重傳變動的 key 是 66 個 put（65 個 keyword key 加 `c-manifest`）。
+- 沒有孤兒 key 要刪。rows 0–7 同名覆寫，rows 8–63 新增，KV 端沒有舊 key 需要刪除端點。
+- 部署順序：先上讀取端（能依 meta 讀 8 或 64 塊），再匯入 v5 blob。舊版程式讀到 64 塊的 meta 只會找 0–7 塊，會漏關鍵字。匯入期間 rows 0–7 會先被覆寫，meta 最後才翻，有即時流量時會有一個短暫漏字窗口。這次沒有 deploy，也沒有匯入 Cloudflare。
+
+## 限制
+
+- 冷 5000 字變慢。320 個命中 anchor 落在 63/64 個分區，讀到 63 塊共 14.59 MB；v4 讀 7/8 塊共 12.89 MB。本機 wall 從 29.7–33.3 ms 升到 38.9–41.6 ms。
+- 冷長訊息要一次讀 64 塊。一次 multi-get 的冷 5000 字是 45–49 ms；先前每批 16 個 key 併發 4 次是 39–42 ms。CI 在併發版本掉過一次 chunk value（`keyword row chunk was missing`），本機重跑沒再現，已退回單次 get，短訊息不受影響。
+- `listKeywords`、`inspectKeywords` 冷啟動仍會載入全部 64 塊，沒有另外量。
+- 非 2 的次方的 `rowChunks` 會被 meta 驗證拒絕，當成沒有 cache。
+
+## 重跑
+
+```bash
+cd workers
+npm run blobs -- --sqlite ~/linebot-import/line-snapshot-20261121.db --out /tmp/c-blob-build-v5
+C_BLOB_DIR=/tmp/c-blob-build-v5 npm run bench:c
+C_BLOB_DIR=/tmp/c-blob-build-v5 npm run bench:local
+npm run bench
+```
+
+結果只印列數、位元組和時間，不印訊息、名稱、關鍵字或 id。

@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const PORT = 8797;
-const DIR = process.env.C_BLOB_DIR ?? "/tmp/c-blob-build-v4";
+const DIR = process.env.C_BLOB_DIR ?? "/tmp/c-blob-build-v5";
 const SNAPSHOT =
   process.env.C_SNAPSHOT ?? join(homedir(), "linebot-import/line-snapshot-20261121.db");
 

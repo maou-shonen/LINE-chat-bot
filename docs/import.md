@@ -24,7 +24,7 @@ npm run blobs -- \
 
 產出的 key：
 
-- `keyword-probe-cache-*`、`keyword-row-cache-*`：關鍵字基底，最多 16 個 key，每塊 1.3 MB。row blob 帶 `author`，`##保護` 行為和 SQL 版一致。
+- `keyword-cache-meta`、`keyword-aho-<gen>-<n>`、`keyword-rows-<gen>-<n>`：關鍵字基底。meta 記 chunk 數與位元組數，row chunk 64 塊、每塊約 230 KB，aho 1 塊，合計 66 個 key。row blob 帶 `author`，`##保護` 行為和 SQL 版一致。
 - `c-group:{gid}`：每個群組一個 key，含 group 列、成員（名字、計數）、群組設定。沒有 group 列的 gid 也會有，`group` 為 null。
 - `c-user:00`–`ff`：全部 user 列和私訊設定，256 塊。
 - `c-logs:0`–：`keywords_logs` 歷史，每塊約 1 MB，最多 16 塊。

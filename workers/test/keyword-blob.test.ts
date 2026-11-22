@@ -1,10 +1,11 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { COLD_BOT_STATE, keywordBlobEntries } from "../src/blob-store";
+import { COLD_BOT_STATE, KEYWORD_CACHE_META_KEY, ahoChunkKey, keywordBlobEntries, rowChunkKey } from "../src/blob-store";
+import { buildAho, encodeAho } from "../src/aho";
 import type { BotState } from "../src/bot-state";
-import { keywordChunk } from "../src/keyword-rows";
-import type { KeywordSelect } from "../src/keywords";
+import { encodeKeywordRows, keywordChunk } from "../src/keyword-rows";
+import { anchorOf, type KeywordSelect } from "../src/keywords";
 
 function rowKeys(keys: readonly string[]): string[] {
   return keys.filter((key) => key.startsWith("keyword-rows-"));
@@ -159,6 +160,49 @@ describe("keyword base blob", () => {
     expect(await stub.deleteKeyword({ scopeId: "C1", author: "U1", keyword: "kw50" })).toBe("deleted");
     expect(await stub.getKeyword({ scopeId: "C1", keyword: "kw50" })).toBeNull();
     expect(rowKeys(await readGetKeys(stub))).toEqual(chunks);
+  });
+
+  it("reads a v4 base whose meta recorded 8 row chunks", async () => {
+    const rows = [
+      { id: "C1", keyword: "kw5", reply: "five", author: null },
+      { id: "C1", keyword: "kw50", reply: "fifty", author: null },
+      { id: null, keyword: "gonly", reply: "global", author: null },
+    ].map((row) => ({ ...row, anchor: anchorOf(row.keyword) }));
+    const slots = Array.from({ length: 8 }, () => ({ rows: [] as typeof rows, ordinals: [] as number[] }));
+    const legacySlots = rows.map((row) => keywordChunk(row.anchor, 8));
+    expect(legacySlots).toEqual([1, 0, 1]);
+    rows.forEach((row, ordinal) => {
+      const slot = slots[legacySlots[ordinal] as number];
+      if (slot === undefined) throw new Error("chunk out of range");
+      slot.rows.push(row);
+      slot.ordinals.push(ordinal);
+    });
+    const parts = slots.map((slot) => encodeKeywordRows(slot.rows, slot.ordinals));
+    const aho = encodeAho(buildAho(rows.map((row) => row.anchor)));
+    const meta = {
+      version: 4,
+      ahoGen: 1,
+      ahoChunks: 1,
+      ahoBytes: aho.byteLength,
+      rowGen: 1,
+      rowChunks: 8,
+      rowBytes: parts.reduce((sum, part) => sum + part.byteLength, 0),
+      rowCount: rows.length,
+      anchors: rows.length,
+      emptyAnchor: false,
+      lengths: [...new Set(rows.map((row) => row.anchor.length))].sort((left, right) => left - right),
+    };
+    await runInDurableObject(stub, async (_instance, state) => {
+      await state.storage.put(ahoChunkKey(1, 0), aho.buffer);
+      for (let index = 0; index < parts.length; index += 1) {
+        await state.storage.put(rowChunkKey(1, index), (parts[index] as Uint8Array).buffer);
+      }
+      await state.storage.put(KEYWORD_CACHE_META_KEY, meta);
+    });
+    await reset(stub);
+    expect(await stub.getKeyword({ scopeId: "C1", keyword: "kw5" })).toBe("five");
+    expect(await stub.getKeyword({ scopeId: "C1", keyword: "kw50" })).toBe("fifty");
+    expect(await stub.getKeyword({ scopeId: null, keyword: "gonly" })).toBe("global");
   });
 
   async function putBase(

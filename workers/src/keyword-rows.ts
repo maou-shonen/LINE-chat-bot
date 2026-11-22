@@ -51,11 +51,13 @@ export interface OverlayKeywordTable {
 
 export type KeywordStore = KeywordTable | StoredKeywordTable | ChunkedKeywordTable | OverlayKeywordTable;
 
-export const KEYWORD_CHUNK_BITS = 3;
-export const KEYWORD_CHUNK_COUNT = 1 << KEYWORD_CHUNK_BITS;
+export const KEYWORD_CHUNK_COUNT = 64;
 
-export function keywordChunk(anchor: string): number {
-  return hashText(anchor) >>> (32 - KEYWORD_CHUNK_BITS);
+// v4 caches recorded 8 chunks; new blobs record 64. Follow the meta count so an
+// old cache stays readable after the upgrade.
+export function keywordChunk(anchor: string, chunkCount: number = KEYWORD_CHUNK_COUNT): number {
+  const bits = 31 - Math.clz32(chunkCount);
+  return bits === 0 ? 0 : hashText(anchor) >>> (32 - bits);
 }
 
 export function registerChunk(
@@ -791,7 +793,7 @@ function pushBaseGroupRows(base: BaseKeywordTable, anchor: string, rows: number[
     return;
   }
   if (anchor === "" && !base.emptyAnchor) return;
-  const chunk = base.loaded.get(keywordChunk(anchor));
+  const chunk = base.loaded.get(keywordChunk(anchor, base.chunkCount));
   if (chunk === undefined) throw new Error("keyword chunk was not loaded");
   const group = findGroup(chunk, anchor);
   if (group === null) return;
@@ -804,7 +806,7 @@ function baseKeywordIndexes(base: BaseKeywordTable, keyword: string): number[] {
   if (base.kind === "stored") return keywordIndexes(base, keyword);
   const anchor = anchorOf(keyword);
   if (anchor === "" && !base.emptyAnchor) return [];
-  const chunk = base.loaded.get(keywordChunk(anchor));
+  const chunk = base.loaded.get(keywordChunk(anchor, base.chunkCount));
   if (chunk === undefined) throw new Error("keyword chunk was not loaded");
   return keywordIndexes(chunk, keyword).map((local) => chunkRowOrdinal(chunk, local));
 }

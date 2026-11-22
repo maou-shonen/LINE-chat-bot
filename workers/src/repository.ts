@@ -136,6 +136,7 @@ export class SqliteBotRepository implements BotRepository {
   };
   private rowsRead = 0;
   private compactJob: CompactJob | null = null;
+  private compactQueue: Promise<void> = Promise.resolve();
 
   private phases(): PhaseTimer {
     return this.timing ? new PhaseTimer(true) : NO_PHASES;
@@ -276,15 +277,31 @@ export class SqliteBotRepository implements BotRepository {
   }
 
   async compactKeywordCache(): Promise<KeywordCompact> {
+    const step = this.compactQueue.then(() => this.compactStep());
+    this.compactQueue = step.then(() => undefined, () => undefined);
+    return step;
+  }
+
+  private async compactStep(): Promise<KeywordCompact> {
     const started = performance.now();
     const cache = await this.readyCache(false);
-    if (this.compactJob === null) {
+    let job = this.compactJob;
+    if (job !== null && job.cache !== cache) {
+      // The cache was replaced while this job was in flight, so its base and
+      // loaded set describe a different cache. Drop it and start over.
+      this.compactJob = null;
+      job = null;
+    }
+    if (job === null) {
       if (!this.needsCompact(cache)) {
         return { done: true, ms: performance.now() - started, phase: "idle" };
       }
-      this.compactJob = await this.beginCompact();
+      job = await this.beginCompact(cache);
+      if (this.probeCache !== cache) {
+        return { done: false, ms: performance.now() - started, phase: "restart" };
+      }
+      this.compactJob = job;
     }
-    const job = this.compactJob;
     if (job.phase === "load") {
       const base = cache.table.kind === "overlay" ? cache.table.base : cache.table;
       if (base.kind === "chunked") {
@@ -332,9 +349,14 @@ export class SqliteBotRepository implements BotRepository {
       }
     }
     if (job.phase === "store" && elapsed() < COMPACT_BUDGET_MS) {
-      const done = await this.storeCompactSlice(cache, job, COMPACT_BUDGET_MS - elapsed());
+      const done = await this.storeCompactSlice(job, COMPACT_BUDGET_MS - elapsed());
       if (done) {
         this.compactJob = null;
+        if (this.probeCache !== cache) {
+          // A cache installed during the job may predate the new meta.
+          this.probeCache = null;
+          return { done: false, ms: performance.now() - started, phase: "restart" };
+        }
         const more = this.needsCompact(cache);
         return { done: !more, ms: performance.now() - started, phase: more ? "again" : "done" };
       }
@@ -776,7 +798,7 @@ export class SqliteBotRepository implements BotRepository {
     const ids = new Set<number>();
     for (const anchor of anchors) {
       if (anchor === "" && !base.emptyAnchor) continue;
-      ids.add(keywordChunk(anchor));
+      ids.add(keywordChunk(anchor, base.chunkCount));
     }
     const missing = [...ids].filter((id) => !base.loaded.has(id));
     phases.count("chunksMissing", missing.length);
@@ -801,11 +823,18 @@ export class SqliteBotRepository implements BotRepository {
     if (ids.length === 0) return;
     const keys = ids.map((id) => rowChunkKey(base.gen, id));
     const getStart = phases.enabled ? performance.now() : 0;
+    // One get for all chunk ids (64 at most, under the 128 key limit).
+    // Concurrent batch gets were the only new read path when CI missed a chunk.
     const values = await this.storage.get(keys);
     if (phases.enabled) phases.add("chunkGet", performance.now() - getStart);
     for (let i = 0; i < ids.length; i += 1) {
       const raw = asBytes(values.get(keys[i] ?? ""));
-      if (raw === null) throw new TypeError("keyword row chunk was missing");
+      if (raw === null) {
+        const meta = await this.readMeta();
+        throw new TypeError(
+          `keyword row chunk was missing gen=${base.gen} id=${ids[i]} chunks=${base.chunkCount} meta=${meta?.rowGen}/${meta?.rowChunks}`,
+        );
+      }
       phases.count("chunkBytes", raw.byteLength);
       const decodeStart = phases.enabled ? performance.now() : 0;
       const chunk = decodeKeywordTable(raw);
@@ -827,11 +856,10 @@ export class SqliteBotRepository implements BotRepository {
     }
   }
 
-  private async beginCompact(): Promise<CompactJob> {
-    const cache = this.probeCache;
-    if (cache === null) throw new Error("probe cache is missing");
+  private async beginCompact(cache: ProbeCache): Promise<CompactJob> {
     const oldMeta = await this.readMeta();
     return {
+      cache,
       encode: startChunkEncodeJob(cache.table),
       aho: null,
       anchors: [],
@@ -854,7 +882,8 @@ export class SqliteBotRepository implements BotRepository {
     };
   }
 
-  private async storeCompactSlice(cache: ProbeCache, job: CompactJob, budgetMs: number): Promise<boolean> {
+  private async storeCompactSlice(job: CompactJob, budgetMs: number): Promise<boolean> {
+    const cache = job.cache;
     const started = performance.now();
     const machine = job.aho?.machine ?? null;
     if (machine === null) throw new Error("compact store started early");
@@ -885,6 +914,9 @@ export class SqliteBotRepository implements BotRepository {
       if (job.deletedTo < job.deltaBase || performance.now() - started >= budgetMs) return false;
     }
     if (!job.flipped) {
+      if (job.rowAt !== KEYWORD_CHUNK_COUNT || job.base === null || job.base.loaded.size !== KEYWORD_CHUNK_COUNT) {
+        throw new Error(`compact chunk count mismatch rowAt=${job.rowAt} loaded=${job.base?.loaded.size}`);
+      }
       const meta: KeywordMeta = {
         version: KEYWORD_CACHE_VERSION,
         ahoGen: job.ahoGen,
@@ -1432,6 +1464,7 @@ interface KeywordMeta {
 }
 
 interface CompactJob {
+  cache: ProbeCache;
   encode: ChunkEncodeJob;
   aho: AhoBuild | null;
   anchors: string[];
@@ -1516,6 +1549,7 @@ function parseKeywordMeta(value: unknown): KeywordMeta | null {
   if ((record.ahoChunks as number) < 1 || (record.rowChunks as number) < 1 || (record.rowChunks as number) > 256) {
     return null;
   }
+  if (((record.rowChunks as number) & ((record.rowChunks as number) - 1)) !== 0) return null;
   const lengths = record.lengths;
   if (!Array.isArray(lengths) || lengths.some((length) => typeof length !== "number" || !Number.isInteger(length) || length < 1)) {
     return null;

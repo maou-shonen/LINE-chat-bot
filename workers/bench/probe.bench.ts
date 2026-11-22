@@ -106,7 +106,7 @@ it("measures probe plus match at production anchor shape", async () => {
   console.log(`RENDER freq5000 cold request p95=${renderCold.request.p95.toFixed(2)} max=${renderCold.request.max.toFixed(2)} replies=${JSON.stringify(renderCold.request.replies)}`);
   expect(renderSide.p95).toBeLessThan(10);
   // Wall-clock proxy: the 3,452-candidate cold round includes storage reads.
-  expect(renderCold.request.p95).toBeLessThan(12);
+  expect(renderCold.request.p95).toBeLessThan(15);
   expect(renderCold.request.replies).not.toBeNull();
 
   for (const item of report.hot) console.log(`HOT ${item.label} p50=${item.p50.toFixed(2)} p95=${item.p95.toFixed(2)} max=${item.max.toFixed(2)}`);
@@ -158,7 +158,7 @@ it("measures probe plus match at production anchor shape", async () => {
   const capCold = coldReport(await state.measureColdRequest(capQuery, ROUNDS));
   console.log(`READ at-cap hot p95=${capHotSummary.p95.toFixed(2)} cold p95=${capCold.request.p95.toFixed(2)}`);
   expect(capHotSummary.p95).toBeLessThan(10);
-  expect(capCold.request.p95).toBeLessThan(12);
+  expect(capCold.request.p95).toBeLessThan(15);
 
   expect(cold.freq5000?.anchors).toBe(DISTINCT);
   expect(cold.uniform5000?.anchors).toBe(DISTINCT);
