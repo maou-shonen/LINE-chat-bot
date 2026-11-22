@@ -57,7 +57,8 @@ describe("keyword compaction races", () => {
     const meta = await stored(state);
     expect(meta.chunks).toBe(64);
     expect(meta.keys).toBe(64);
-    const audit = await state.auditKeywordSelect(QUERY);
+    const audit = await state.auditKeywordSelect({ ...QUERY, message: "zza7anchorzz" });
+    expect(audit.memory.length).toBeGreaterThan(0);
     expect(audit.memory).toEqual(audit.sql);
   });
 
@@ -83,7 +84,8 @@ describe("keyword compaction races", () => {
     const meta = await stored(state);
     expect(meta.chunks).toBe(64);
     expect(meta.keys).toBe(64);
-    const audit = await state.auditKeywordSelect(QUERY);
+    const audit = await state.auditKeywordSelect({ ...QUERY, message: "zzc7anchorzz" });
+    expect(audit.memory.length).toBeGreaterThan(0);
     expect(audit.memory).toEqual(audit.sql);
   });
 });
