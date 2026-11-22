@@ -249,8 +249,7 @@ export class BotState extends DurableObject<Env> {
   }
 
   private async keepAlive(): Promise<void> {
-    if ((await this.ctx.storage.getAlarm()) !== null) return;
-    await this.ctx.storage.setAlarm(Date.now() + KEEPALIVE_INTERVAL_MS);
+    await this.repo.scheduleAlarmNoLaterThan(Date.now() + KEEPALIVE_INTERVAL_MS);
   }
 
   async alarm(): Promise<void> {
