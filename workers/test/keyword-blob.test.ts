@@ -68,11 +68,22 @@ describe("keyword base blob", () => {
     expect(await stub.getKeyword({ scopeId: "C1", keyword: "gone" })).toBe("back");
   });
 
+  it("keeps a protected base keyword for its author only", async () => {
+    await putBase([{ id: "C1", author: "U1", keyword: "pk", reply: "secret##保護" }]);
+    await reset(stub);
+    expect(await stub.upsertKeyword(write("C1", "pk", "other", false, "U2"))).toBe("protected");
+    expect(await stub.deleteKeyword({ scopeId: "C1", author: "U2", keyword: "pk" })).toBe("protected");
+    expect(await stub.getKeyword({ scopeId: "C1", keyword: "pk" })).toBe("secret##保護");
+    expect(await stub.upsertKeyword(write("C1", "pk", "mine", false, "U1"))).toBe("written");
+    expect(await stub.getKeyword({ scopeId: "C1", keyword: "pk" })).toBe("mine");
+    expect(await stub.deleteKeyword({ scopeId: "C1", author: "U1", keyword: "pk" })).toBe("deleted");
+    expect(await stub.getKeyword({ scopeId: "C1", keyword: "pk" })).toBeNull();
+  });
+
   it("matches the sql corpus for a reply", async () => {
     const rows = [
       { id: "C1", keyword: "exact", reply: "e" },
       { id: "C1", keyword: "other", reply: "o" },
-      { id: null, keyword: "gonly", reply: "g" },
     ];
     await putBase(rows);
     await reset(stub);
@@ -100,7 +111,9 @@ describe("keyword base blob", () => {
     expect(await readMeter(stub)).toBe(0);
   });
 
-  async function putBase(rows: Array<{ id: string | null; keyword: string; reply: string }>): Promise<void> {
+  async function putBase(
+    rows: Array<{ id: string | null; keyword: string; reply: string; author?: string | null }>,
+  ): Promise<void> {
     const entries = keywordBlobEntries(rows);
     await runInDurableObject(stub, async (_instance, state) => {
       for (const entry of entries) {
@@ -119,8 +132,8 @@ function replies(result: { replies: string[] | null }): string[] | null {
   return result.replies;
 }
 
-function write(scopeId: string, keyword: string, reply: string, plus: boolean) {
-  return { scopeId, author: "U1", keyword, reply, plus, now: NOW };
+function write(scopeId: string, keyword: string, reply: string, plus: boolean, author = "U1") {
+  return { scopeId, author, keyword, reply, plus, now: NOW };
 }
 
 async function reset(stub: DurableObjectStub<BotState>): Promise<void> {

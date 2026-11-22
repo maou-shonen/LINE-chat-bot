@@ -95,7 +95,7 @@ describe("keyword replies", () => {
 const choice = { rng: [{ op: "choice", index: 0 }] satisfies RngOp[] };
 
 function keyword(keywordText: string, reply: string): KeywordRow {
-  return { id: "C", keyword: keywordText, reply, anchor: "" };
+  return { id: "C", keyword: keywordText, reply, anchor: "", author: null };
 }
 
 function query(message: string, extra: Partial<KeywordSelect> = {}): KeywordSelect {

@@ -8,7 +8,7 @@ import {
 } from "./keyword-rows";
 
 export const COLD_BOT_STATE = "global-c";
-export const BLOB_CHUNK_BYTES = 1_000_000;
+export const BLOB_CHUNK_BYTES = 1_300_000;
 export const BLOB_VALUE_LIMIT = 8 * 1024 * 1024;
 export const KEYWORD_BLOB_KEY_LIMIT = 16;
 const LOG_BLOB_LIMIT = 16;
@@ -94,7 +94,7 @@ export function groupBlobKey(id: string): string {
 }
 
 export function keywordBlobEntries(
-  rows: ReadonlyArray<{ id: string | null; keyword: string; reply: string }>,
+  rows: ReadonlyArray<{ id: string | null; keyword: string; reply: string; author?: string | null }>,
 ): BlobPut[] {
   const table = emptyKeywordTable();
   for (const row of rows) upsertKeywordRow(table, row);

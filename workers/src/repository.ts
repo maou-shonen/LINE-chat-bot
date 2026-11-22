@@ -35,11 +35,13 @@ import {
   deleteKeywordRow,
   emptyKeywordTable,
   findKeywordRow,
+  listKeywordTexts,
   rowsForHits,
   snapshotRows,
   startEncodeJob,
   stepEncodeJob,
   upsertKeywordRow,
+  visitKeywordRows,
   type EncodeJob,
   type KeywordStore,
   type KeywordTable,
@@ -49,7 +51,6 @@ import {
 const CACHE_META_KEY = "keyword-probe-cache-meta";
 const ROW_META_KEY = "keyword-row-cache-meta";
 const DELTA_META_KEY = "keyword-row-delta-meta";
-const CHUNK_MAX_BYTES = 1_000_000;
 const COMPACT_BUDGET_MS = 1;
 export const KEYWORD_DELTA_LIMIT = 32;
 const STORE_SLICE_BYTES = 200_000;
@@ -483,7 +484,7 @@ export class SqliteBotRepository implements BotRepository {
     if (!this.coldMode) return sqlRow;
     const row = findKeywordRow(cache.table, scopeId, keyword);
     if (row === null) return null;
-    return { author: sqlRow?.author ?? null, reply: row.reply };
+    return { author: sqlRow?.author ?? row.author, reply: row.reply };
   }
 
   private async noteKeywordOps(cache: ProbeCache, ops: RowDeltaOp[]): Promise<void> {
@@ -620,7 +621,7 @@ export class SqliteBotRepository implements BotRepository {
     const encoded = job.ahoBytes;
     const ahoMeta = parseMeta(await this.storage.get(CACHE_META_KEY));
     const ahoGen = (ahoMeta?.gen ?? 0) + 1;
-    const ahoParts = splitChunks(encoded);
+    const ahoParts = splitChunks(encoded, this.rowSliceBytes);
     if (!job.flipped && job.commitAt < ahoParts.length) {
       const chunk = ahoParts[job.commitAt] ?? new Uint8Array();
       await this.storage.put(chunkKey(ahoGen, job.commitAt), chunk.buffer);
@@ -847,11 +848,7 @@ export class SqliteBotRepository implements BotRepository {
   async listKeywords(scopeId: string | null): Promise<string[]> {
     if (this.coldMode) {
       const cache = await this.readyCache(false);
-      const words: string[] = [];
-      for (const row of snapshotRows(cache.table)) {
-        if (row.id === scopeId) words.push(row.keyword);
-      }
-      return words;
+      return listKeywordTexts(cache.table, scopeId);
     }
     const scope = keywordScope(scopeId);
     return this.storage.sql
@@ -863,13 +860,16 @@ export class SqliteBotRepository implements BotRepository {
   async inspectKeywords(): Promise<KeywordSnapshot> {
     if (!this.coldMode) return readKeywords(this.storage.sql);
     const cache = await this.readyCache(false);
-    const keywords = snapshotRows(cache.table).map((row) => ({
-      scopeId: row.id,
-      author: null,
-      keyword: row.keyword,
-      reply: row.reply,
-      anchor: row.anchor,
-    }));
+    const keywords: StoredKeyword[] = [];
+    visitKeywordRows(cache.table, (row) => {
+      keywords.push({
+        scopeId: row.id,
+        author: row.author,
+        keyword: row.keyword,
+        reply: row.reply,
+        anchor: row.anchor,
+      });
+    });
     return { keywords, logs: readKeywordLogs(this.storage.sql) };
   }
 
@@ -1225,11 +1225,11 @@ function rowsForSelect(
   return fetchByAnchors(sql, hits, query.scopeId);
 }
 
-function splitChunks(bytes: Uint8Array): Uint8Array[] {
+function splitChunks(bytes: Uint8Array, size: number): Uint8Array[] {
   if (bytes.byteLength === 0) return [bytes];
   const chunks: Uint8Array[] = [];
-  for (let i = 0; i < bytes.byteLength; i += CHUNK_MAX_BYTES) {
-    chunks.push(bytes.slice(i, i + CHUNK_MAX_BYTES));
+  for (let i = 0; i < bytes.byteLength; i += size) {
+    chunks.push(bytes.slice(i, i + size));
   }
   return chunks;
 }
@@ -1413,7 +1413,7 @@ function keywordFrom(row: Record<string, unknown>): KeywordRow {
   if (typeof keyword !== "string" || typeof reply !== "string" || typeof anchor !== "string") {
     throw new TypeError("user_keyword row was not text");
   }
-  return { id, keyword, reply, anchor };
+  return { id, keyword, reply, anchor, author: null };
 }
 
 function sqlRows(

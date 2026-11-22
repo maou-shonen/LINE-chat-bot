@@ -44,10 +44,16 @@ export function emptyKeywordTable(): KeywordTable {
 
 export function upsertKeywordRow(
   table: KeywordTable,
-  row: { id: string | null; keyword: string; reply: string },
+  row: { id: string | null; keyword: string; reply: string; author?: string | null },
 ): void {
   const anchor = anchorOf(row.keyword);
-  const stored: KeywordRow = { id: row.id, keyword: row.keyword, reply: row.reply, anchor };
+  const stored: KeywordRow = {
+    id: row.id,
+    keyword: row.keyword,
+    reply: row.reply,
+    anchor,
+    author: row.author ?? null,
+  };
   const bucket = idBucket(table, row.id ?? "");
   const index = bucket.get(row.keyword);
   if (index === undefined) {
@@ -112,6 +118,67 @@ export function materializeKeywordTable(table: StoredKeywordTable): KeywordTable
   return map;
 }
 
+export function listKeywordTexts(table: KeywordStore, scopeId: string | null): string[] {
+  const wanted = scopeId ?? "";
+  const out: string[] = [];
+  if (table.kind === "map") {
+    for (const row of table.rows) {
+      if (row !== null && (row.id ?? "") === wanted) out.push(row.keyword);
+    }
+    return out;
+  }
+  if (table.kind === "stored") {
+    for (let i = 0; i < table.rowCount; i += 1) {
+      if (storedIdIs(table, i, wanted)) out.push(storedField(table, i, 2));
+    }
+    return out;
+  }
+  for (let i = 0; i < table.base.rowCount; i += 1) {
+    if (table.deleted.has(i)) continue;
+    const replaced = table.replaced.get(i);
+    if (replaced !== undefined) {
+      if ((replaced.id ?? "") === wanted) out.push(replaced.keyword);
+      continue;
+    }
+    if (storedIdIs(table.base, i, wanted)) out.push(storedField(table.base, i, 2));
+  }
+  for (const row of table.appended) {
+    if (row !== null && (row.id ?? "") === wanted) out.push(row.keyword);
+  }
+  return out;
+}
+
+export function visitKeywordRows(table: KeywordStore, visit: (row: KeywordRow) => void): void {
+  if (table.kind === "map") {
+    for (const row of table.rows) {
+      if (row !== null) visit(row);
+    }
+    return;
+  }
+  if (table.kind === "stored") {
+    for (let i = 0; i < table.rowCount; i += 1) visit(readStoredRow(table, i));
+    return;
+  }
+  const count = table.base.rowCount + table.appended.length;
+  for (let i = 0; i < count; i += 1) {
+    const row = readOverlayRow(table, i);
+    if (row !== null) visit(row);
+  }
+}
+
+function storedIdIs(table: StoredKeywordTable, index: number, id: string): boolean {
+  const base = index * ROW_STRIDE;
+  const len = table.rowMeta[base + 1] ?? 0;
+  if (len === NULL_ID) return id === "";
+  if (len !== id.length) return false;
+  return sameText(table.units, table.rowMeta[base] ?? 0, len, id);
+}
+
+function storedField(table: StoredKeywordTable, index: number, slot: number): string {
+  const base = index * ROW_STRIDE;
+  return sliceText(table.units, table.rowMeta[base + slot] ?? 0, table.rowMeta[base + slot + 1] ?? 0);
+}
+
 export function findKeywordRow(
   table: KeywordStore,
   scopeId: string | null,
@@ -154,7 +221,7 @@ export function encodeKeywordTable(table: KeywordTable): Uint8Array {
   keywords.sort((left, right) => cmpHash(left.hash, right.hash) || left.index - right.index);
 
   let chars = 0;
-  for (const row of live) chars += (row.id?.length ?? 0) + row.keyword.length + row.reply.length;
+  for (const row of live) chars += (row.id?.length ?? 0) + row.keyword.length + row.reply.length + (row.author?.length ?? 0);
   const poolCount = live.length;
   const header = 20;
   const groupBytes = groups.length * GROUP_STRIDE * 4;
@@ -163,7 +230,7 @@ export function encodeKeywordTable(table: KeywordTable): Uint8Array {
   const rowBytes = live.length * ROW_STRIDE * 4;
   const bytes = new Uint8Array(header + groupBytes + keywordBytes + poolBytes + rowBytes + chars * 2);
   const view = new DataView(bytes.buffer);
-  view.setUint32(0, 2, true);
+  view.setUint32(0, 3, true);
   view.setUint32(4, groups.length, true);
   view.setUint32(8, live.length, true);
   view.setUint32(12, poolCount, true);
@@ -206,6 +273,9 @@ export function encodeKeywordTable(table: KeywordTable): Uint8Array {
     view.setUint32(rowStart + i * ROW_STRIDE * 4 + 16, at, true);
     view.setUint32(rowStart + i * ROW_STRIDE * 4 + 20, row.reply.length, true);
     at = writeUnits(units, at, row.reply);
+    view.setUint32(rowStart + i * ROW_STRIDE * 4 + 24, at, true);
+    view.setUint32(rowStart + i * ROW_STRIDE * 4 + 28, row.author === null ? NULL_ID : row.author.length, true);
+    if (row.author !== null) at = writeUnits(units, at, row.author);
   }
   let groupCursor = header;
   for (const group of groups) {
@@ -218,8 +288,8 @@ export function encodeKeywordTable(table: KeywordTable): Uint8Array {
 export function decodeKeywordTable(bytes: Uint8Array): StoredKeywordTable {
   if (bytes.byteOffset % 4 !== 0) throw new TypeError("keyword row blob was misaligned");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (bytes.byteLength < 20 || view.getUint32(0, true) !== 2) {
-    throw new TypeError("keyword row blob was not version 2");
+  if (bytes.byteLength < 20 || view.getUint32(0, true) !== 3) {
+    throw new TypeError("keyword row blob was not version 3");
   }
   const groupCount = view.getUint32(4, true);
   const rowCount = view.getUint32(8, true);
@@ -247,7 +317,7 @@ export function decodeKeywordTable(bytes: Uint8Array): StoredKeywordTable {
 }
 
 const GROUP_STRIDE = 5;
-const ROW_STRIDE = 6;
+const ROW_STRIDE = 8;
 const NULL_ID = 0xffffffff;
 
 function storedRows(
@@ -340,6 +410,8 @@ function readStoredRow(table: StoredKeywordTable, index: number): KeywordRow {
   const kwLen = table.rowMeta[base + 3] ?? 0;
   const replyOff = table.rowMeta[base + 4] ?? 0;
   const replyLen = table.rowMeta[base + 5] ?? 0;
+  const authorOff = table.rowMeta[base + 6] ?? 0;
+  const authorLen = table.rowMeta[base + 7] ?? 0;
   const id = idLen === NULL_ID ? null : sliceText(table.units, idOff, idLen);
   const keyword = sliceText(table.units, kwOff, kwLen);
   return {
@@ -347,6 +419,7 @@ function readStoredRow(table: StoredKeywordTable, index: number): KeywordRow {
     keyword,
     reply: sliceText(table.units, replyOff, replyLen),
     anchor: anchorOf(keyword),
+    author: authorLen === NULL_ID ? null : sliceText(table.units, authorOff, authorLen),
   };
 }
 
@@ -400,6 +473,7 @@ export function applyOverlayOp(table: OverlayKeywordTable, op: RowDeltaOp): void
     keyword: op.keyword,
     reply: op.reply,
     anchor: anchorOf(op.keyword),
+    author: index !== null && index < table.base.rowCount ? readStoredRow(table.base, index).author : null,
   };
   if (index === null) {
     const at = table.base.rowCount + table.appended.length;
@@ -515,7 +589,7 @@ function bucketRows(job: EncodeJob, start: number, budgetMs: number): void {
     listed.push(index);
     const keywordHash = hashText(row.keyword);
     job.keywordBuckets[keywordHash >>> 24]?.push({ hash: keywordHash, index });
-    job.chars += (row.id?.length ?? 0) + row.keyword.length + row.reply.length;
+    job.chars += (row.id?.length ?? 0) + row.keyword.length + row.reply.length + (row.author?.length ?? 0);
   }
   if (job.cursor < total) return;
   job.cursor = 0;
@@ -552,7 +626,7 @@ function flattenBuckets(job: EncodeJob, start: number, budgetMs: number): void {
   const rowBytes = job.live.length * ROW_STRIDE * 4;
   job.bytes = new Uint8Array(header + groupBytes + keywordBytes + poolBytes + rowBytes + job.chars * 2);
   const view = new DataView(job.bytes.buffer);
-  view.setUint32(0, 2, true);
+  view.setUint32(0, 3, true);
   view.setUint32(4, job.groups.length, true);
   view.setUint32(8, job.live.length, true);
   view.setUint32(12, job.live.length, true);
@@ -632,6 +706,9 @@ function fillEncodedRows(job: EncodeJob, start: number, budgetMs: number): void 
     view.setUint32(rowStart + index * ROW_STRIDE * 4 + 16, job.at, true);
     view.setUint32(rowStart + index * ROW_STRIDE * 4 + 20, row.reply.length, true);
     job.at = writeUnits(units, job.at, row.reply);
+    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 24, job.at, true);
+    view.setUint32(rowStart + index * ROW_STRIDE * 4 + 28, row.author === null ? NULL_ID : row.author.length, true);
+    if (row.author !== null) job.at = writeUnits(units, job.at, row.author);
   }
   if (job.cursor < job.live.length) return;
   let groupCursor = header;

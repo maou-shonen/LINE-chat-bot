@@ -181,12 +181,12 @@ function collect(db: DatabaseSync): { puts: BlobPut[]; summary: BlobSummary } {
     settingsGroup += 1;
   }
 
-  const keywords: Array<{ id: string | null; keyword: string; reply: string }> = [];
-  for (const row of db.prepare("SELECT id, keyword, reply FROM user_keyword ORDER BY _id").all()) {
+  const keywords: Array<{ id: string | null; keyword: string; reply: string; author: string | null }> = [];
+  for (const row of db.prepare("SELECT id, author, keyword, reply FROM user_keyword ORDER BY _id").all()) {
     const keyword = text(row, "keyword");
     const reply = text(row, "reply");
     if (keyword === null || reply === null) continue;
-    keywords.push({ id: text(row, "id"), keyword, reply });
+    keywords.push({ id: text(row, "id"), keyword, reply, author: text(row, "author") });
   }
   const keywordPuts = keywordBlobEntries(keywords);
 
