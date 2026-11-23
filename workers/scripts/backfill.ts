@@ -10,9 +10,29 @@ export interface BackfillOptions {
   endpoint: string;
   sqlitePath: string;
   secret: string;
+  dryRun?: boolean;
+  includeTestIds?: boolean;
   fetchImpl?: typeof fetch;
   limit?: number;
   stdout: (line: string) => void;
+}
+
+const TEST_ID_COLUMNS: Record<ExportTable, readonly string[]> = {
+  user: ["id"],
+  group: ["id"],
+  group_user: ["gid", "uid"],
+  user_settings: ["group_id", "user_id"],
+  user_keyword: ["id", "author"],
+  keywords_logs: ["_id", "id"],
+  keyword_tombstone: ["id"],
+  group_user_tombstone: ["gid", "uid"],
+};
+
+function isTestRow(table: ExportTable, row: Record<string, unknown>): boolean {
+  return TEST_ID_COLUMNS[table].some((column) => {
+    const value = row[column];
+    return typeof value === "string" && value.endsWith("cftest");
+  });
 }
 
 export async function runBackfill(options: BackfillOptions): Promise<Record<ExportTable, number>> {
@@ -23,7 +43,7 @@ export async function runBackfill(options: BackfillOptions): Promise<Record<Expo
     throw new Error("fetch limit must be 1..500");
   }
   const fetchImpl = options.fetchImpl ?? fetch;
-  const db = new DatabaseSync(resolve(options.sqlitePath));
+  const db = options.dryRun ? null : new DatabaseSync(resolve(options.sqlitePath));
   const counts: Record<ExportTable, number> = {
     user: 0,
     group: 0,
@@ -34,7 +54,8 @@ export async function runBackfill(options: BackfillOptions): Promise<Record<Expo
     keyword_tombstone: 0,
     group_user_tombstone: 0,
   };
-  db.exec("BEGIN IMMEDIATE");
+  const skipped: Record<ExportTable, number> = { ...counts };
+  db?.exec("BEGIN IMMEDIATE");
   try {
     for (const table of EXPORT_TABLES) {
       let after = 0;
@@ -46,20 +67,22 @@ export async function runBackfill(options: BackfillOptions): Promise<Record<Expo
         });
         if (!response.ok) throw new Error(`export failed for ${table}: ${response.status}`);
         const page = parsePage(await response.json());
-        applyRows(db, table, page.rows);
-        counts[table] += page.rows.length;
+        const rows = options.includeTestIds ? page.rows : page.rows.filter((row) => !isTestRow(table, row));
+        skipped[table] += page.rows.length - rows.length;
+        if (db) applyRows(db, table, rows);
+        counts[table] += rows.length;
         if (page.next === null) break;
         after = page.next;
       }
     }
-    db.exec("COMMIT");
+    db?.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    db?.exec("ROLLBACK");
     throw error;
   } finally {
-    db.close();
+    db?.close();
   }
-  options.stdout(EXPORT_TABLES.map((table) => `${table}=${counts[table]}`).join("\n"));
+  options.stdout(EXPORT_TABLES.map((table) => `${table}=${counts[table]} skipped=${skipped[table]}`).join("\n"));
   return counts;
 }
 
@@ -263,25 +286,41 @@ function nullIfEmpty(value: string): string | null {
 }
 
 function main(argv: readonly string[]): Promise<void> {
+  const usage = "usage: backfill --endpoint URL --sqlite PATH [--dry-run] [--include-test-ids]";
   const args = new Map<string, string>();
-  for (let i = 0; i < argv.length; i += 2) {
+  let dryRun = false;
+  let includeTestIds = false;
+  for (let i = 0; i < argv.length; ) {
     const flag = argv[i];
+    if (flag === "--dry-run") {
+      dryRun = true;
+      i += 1;
+      continue;
+    }
+    if (flag === "--include-test-ids") {
+      includeTestIds = true;
+      i += 1;
+      continue;
+    }
     const value = argv[i + 1];
     if (flag === undefined || !flag.startsWith("--") || value === undefined) {
-      throw new Error("usage: backfill --endpoint URL --sqlite PATH");
+      throw new Error(usage);
     }
     args.set(flag, value);
+    i += 2;
   }
   const endpoint = args.get("--endpoint");
   const sqlitePath = args.get("--sqlite");
   if (endpoint === undefined || sqlitePath === undefined) {
-    throw new Error("usage: backfill --endpoint URL --sqlite PATH");
+    throw new Error(usage);
   }
   const secret = process.env.IMPORT_SECRET ?? "";
   return runBackfill({
     endpoint,
     sqlitePath,
     secret,
+    dryRun,
+    includeTestIds,
     stdout: (line) => {
       process.stdout.write(`${line}\n`);
     },
