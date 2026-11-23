@@ -43,11 +43,15 @@
 4. 在測試群組說一句已知的關鍵字，確認愛醬有回應。
 5. 有多個 channel 就每個都做一次。
 
-**B. 把 `linebot.maou.app` 改指到 Worker（所有 channel 一次切）**
+**B. 把 `linebot.maou.app` 改指到 Worker（custom domain，所有 channel 一次切）**
 
-1. 刪除或停用 `linebot.maou.app` 的 tunnel 路由／CNAME（cloudflared），並記下原值。
-2. 在 `wrangler.jsonc` 加 `"routes": [{ "pattern": "linebot.maou.app", "custom_domain": true }]`，開 PR 合併後 `wrangler deploy`。
-3. LINE console 不用改。按 Verify 檢查。
+順序：快照 → 同步 → 部署 → 驗證。
+
+1. 建好快照 blob、上傳完成，`/healthz` 回 `ok`（第 0 節）。
+2. 依 [import.md](import.md) 同步資料。
+3. 合併 `feat/c-domain` 後，在 `workers/` 執行 `npx wrangler deploy --env=""`。部署就是切換：`workers/wrangler.jsonc` 頂層的 route 會把 `linebot.maou.app` 建成 Workers custom domain，並以 `override_existing_dns_record=true` 取代原本指向 tunnel 的 CNAME。部署前先記下現有 CNAME。
+4. LINE console 不用改。按 Verify 檢查。
+5. `/docs` 與 `/openapi.json` 不再提供（那是 FastAPI 的）。Worker 只服務 `/callback/*`、`/ping`、`/healthz`，以及帶 `IMPORT_SECRET` 的 `/import/kv`、`/export`。
 
 切完後盯 15 分鐘：
 
@@ -64,7 +68,7 @@
 
 ## 4. 回滾（回到 NAS，並把 Workers 期間的寫入同步回去）
 
-1. 使用者在線確認後，依第 2 節反向操作：A 把 webhook URL 改回 `https://linebot.maou.app/...`；B 移除 custom domain、還原 tunnel 路由。
+1. 使用者在線確認後，依第 2 節反向操作。A：把 webhook URL 改回 `https://linebot.maou.app/...`。B：用 API 或 dashboard 刪除 `linebot.maou.app` 的 Workers custom domain，再建立 proxied CNAME 指回 tunnel。只從 `wrangler.jsonc` 刪掉 route 不會移除 domain，因為 wrangler 只在清單非空時發布 custom domain。tunnel 與 DNS record 的 id 不在 repo，見 runbook。
 2. **先讓 NAS 暫停寫入**（停容器或停 webhook 處理幾秒），避免 backfill 和 NAS 同時改同一列。
 3. 備份 NAS 的 `/data/line.db`。
 4. 在 shonen-lab 執行：
