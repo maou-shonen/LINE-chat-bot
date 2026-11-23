@@ -4,7 +4,7 @@
 
 ## 目前狀態（option C）
 
-- Worker：`line-chat-bot`，網址 `https://line-chat-bot.shonen.workers.dev`。沒有 route，也沒綁 `linebot.maou.app`。
+- Worker：`line-chat-bot`，網址 `https://line-chat-bot.shonen.workers.dev`。`workers/wrangler.jsonc` 已宣告 `linebot.maou.app` 的 custom domain，但尚未部署；部署就是切換（第 2 節 B）。
 - 物件：`/callback` 與 `/import/kv`、`/export` 都打 `global-c`。舊的 `global` 不刪、不讀。
 - 資料：冷資料和關鍵字基底是 KV blob，由離線工具建置後用 `/import/kv` 上傳。熱 SQL 只在事件第一次碰到群組或使用者時，從 blob hydrate。
 - 舊的逐列 `POST /import` 與 `npm run import` 已移除。
