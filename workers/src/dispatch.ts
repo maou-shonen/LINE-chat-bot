@@ -147,7 +147,7 @@ export async function handleCallback(
   try {
     for (const event of events) {
       if (event === null || typeof event !== "object" || Array.isArray(event)) continue;
-      await handleEvent(repo, event as Record<string, unknown>, {
+      const clock: Clock = {
         token,
         epoch,
         now,
@@ -157,7 +157,12 @@ export async function handleCallback(
         live: !fixture,
         env,
         phases,
-      });
+      };
+      try {
+        await handleEvent(repo, event as Record<string, unknown>, clock);
+      } catch (error) {
+        await reportEventError(clock, event as Record<string, unknown>, error);
+      }
     }
   } finally {
     phases.end("total");
@@ -618,20 +623,45 @@ async function pushDeveloper(
   source: { userId: string | null; groupId: string | null },
   message: string,
 ): Promise<boolean> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(clock.token)));
+  const bot = [...digest.slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return pushDeveloperMessage(clock, `${bot}\n${source.groupId ?? "None"}\n${source.userId ?? "None"}\n${message}`);
+}
+
+async function pushDeveloperMessage(clock: Clock, message: string): Promise<boolean> {
   const to = clock.env.DEVELOPER_USER_ID ?? "";
   const token = clock.env.DEVELOPER_BOT_TOKEN ?? "";
   if (!clock.live || to === "" || token === "") return false;
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(clock.token)));
-  const bot = [...digest.slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
   const client = createLineClient({ token, fetch: clock.fetch });
   await client.push({
     to,
-    messages: client.format({
-      messages: [`${bot}\n${source.groupId ?? "None"}\n${source.userId ?? "None"}\n${message}`],
-      format: true,
-    }),
+    messages: client.format({ messages: [message], format: true }),
   });
   return true;
+}
+
+// Python run()'s except block: report to the developer, tell the chat, and log types only.
+async function reportEventError(
+  clock: Clock,
+  event: Record<string, unknown>,
+  error: unknown,
+): Promise<void> {
+  const source = sourceIds(event.source);
+  const name = error instanceof Error ? error.name : typeof error;
+  try {
+    if (!(await pushDeveloperMessage(clock, `<愛醬BUG>\n${error instanceof Error ? error.message : String(error)}`))) {
+      console.warn(`error report not configured error=${name}`);
+    }
+    const target = source.groupId ?? source.userId;
+    if (target !== null) {
+      const replyToken = typeof event.replyToken === "string" ? event.replyToken : null;
+      await send(clock, target, replyToken, ["愛醬出錯了！\n作者可能會察看此錯誤報告"]);
+    }
+  } catch {
+    // Python logs 傳送失敗 and keeps the original failure out of the webhook response.
+    console.warn("傳送失敗");
+  }
+  console.warn(`event failed type=${typeof event.type === "string" ? event.type : "unknown"} error=${name}`);
 }
 
 // Python datetime.now() in the NAS container (TZ=Asia/Taipei), str() form with microseconds.
