@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -23,30 +23,40 @@ const PAGES: Record<ExportTable, Record<string, unknown>[]> = {
   user: [
     { id: "U1", name: "Old", create_on: null, update_on: "2024-06-01 00:00:00" },
     { id: "U2", name: "New", create_on: "2024-06-01 00:00:00", update_on: "2024-06-01 00:00:00" },
+    { id: "U1cftest", name: "Test", create_on: null, update_on: null },
   ],
   group: [
     { id: "G1", _id: null, _count: '{"對話": 1}', _setting: "{}", _admin: "{}", create_on: null, update_on: "2024-06-01 00:00:00" },
     { id: "G2", _id: "uuid2", _count: '{"對話": 1}', _setting: "{}", _admin: "{}", create_on: "2024-06-01 00:00:00", update_on: "2024-06-01 00:00:00" },
+    { id: "G1cftest", _id: null, _count: '{"對話": 1}', _setting: "{}", _admin: "{}", create_on: null, update_on: null },
   ],
   group_user: [
     { gid: "G2", uid: "U2", _count: '{"對話": 1}', _setting: "{}" },
     { gid: "G4", uid: "U4", _count: '{"對話": 2}', _setting: "{}" },
+    { gid: "G1cftest", uid: "U1", _count: '{"對話": 1}', _setting: "{}" },
   ],
-  user_settings: [{ group_id: "G1", user_id: "U1", options: '{"全回應": false}' }],
+  user_settings: [
+    { group_id: "G1", user_id: "U1", options: '{"全回應": false}' },
+    { group_id: "G1cftest", user_id: "U1", options: "{}" },
+  ],
   user_keyword: [
     { id: "G1", author: "U1", keyword: "kbase", reply: "changed", anchor: "kbase" },
     { id: "G1", author: "U1", keyword: "knew", reply: "new", anchor: "knew" },
+    { id: "G1cftest", author: "U1", keyword: "kcftest", reply: "test", anchor: "kcftest" },
   ],
   keywords_logs: [
     { _id: "log1", id: "G1", keyword: "knew", reply: "new", create_on: "2024-06-01 00:00:00" },
+    { _id: "logcftest", id: "G1", keyword: "knew", reply: "new", create_on: null },
   ],
   keyword_tombstone: [
     { id: "G1", keyword: "kdel" },
     { id: null, keyword: "gdel" },
+    { id: "G1cftest", keyword: "ktestdel" },
   ],
   group_user_tombstone: [
     { gid: "G1", uid: "U1" },
     { gid: "G3", uid: "" },
+    { gid: "G1cftest", uid: "U4" },
   ],
 };
 
@@ -132,6 +142,15 @@ describe("backfill apply", () => {
       assert.equal(after.prepare("SELECT COUNT(*) AS n FROM keywords_logs").get()?.n, 1);
       assert.equal(after.prepare("SELECT COUNT(*) AS n FROM user").get()?.n, 3);
       assert.equal(after.prepare('SELECT COUNT(*) AS n FROM "group"').get()?.n, 3);
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM user WHERE id = 'U1cftest'").get()?.n, 0);
+      assert.equal(after.prepare('SELECT COUNT(*) AS n FROM "group" WHERE id = ?').get("G1cftest")?.n, 0);
+      assert.equal(
+        after.prepare("SELECT COUNT(*) AS n FROM group_user WHERE COALESCE(gid, '') = 'G1cftest'").get()?.n,
+        0,
+      );
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM user_settings WHERE group_id = 'G1cftest'").get()?.n, 0);
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM user_keyword WHERE keyword = 'kcftest'").get()?.n, 0);
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM keywords_logs WHERE _id = 'logcftest'").get()?.n, 0);
     } finally {
       after.close();
     }
@@ -158,6 +177,56 @@ describe("backfill apply", () => {
     }
   });
 
+  it("includes cftest rows when requested", async () => {
+    const path = seededPath();
+
+    const counts = await apply(path, { includeTestIds: true });
+    assert.deepEqual(counts, {
+      user: 3,
+      group: 3,
+      group_user: 3,
+      user_settings: 2,
+      user_keyword: 3,
+      keywords_logs: 2,
+      keyword_tombstone: 3,
+      group_user_tombstone: 3,
+    });
+
+    const after = new DatabaseSync(path);
+    try {
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM user WHERE id = 'U1cftest'").get()?.n, 1);
+      assert.equal(after.prepare('SELECT COUNT(*) AS n FROM "group" WHERE id = ?').get("G1cftest")?.n, 1);
+      assert.equal(
+        after.prepare("SELECT COUNT(*) AS n FROM group_user WHERE COALESCE(gid, '') = 'G1cftest'").get()?.n,
+        1,
+      );
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM user_settings WHERE group_id = 'G1cftest'").get()?.n, 1);
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM user_keyword WHERE keyword = 'kcftest'").get()?.n, 1);
+      assert.equal(after.prepare("SELECT COUNT(*) AS n FROM keywords_logs WHERE _id = 'logcftest'").get()?.n, 1);
+    } finally {
+      after.close();
+    }
+  });
+
+  it("does not touch sqlite in dry-run mode", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "backfill-"));
+    dirs.push(dir);
+    const path = join(dir, "missing.db");
+
+    const counts = await apply(path, { dryRun: true });
+    assert.equal(existsSync(path), false);
+    assert.deepEqual(counts, {
+      user: 2,
+      group: 2,
+      group_user: 2,
+      user_settings: 1,
+      user_keyword: 2,
+      keywords_logs: 1,
+      keyword_tombstone: 2,
+      group_user_tombstone: 2,
+    });
+  });
+
   it("rejects a non-export endpoint and an empty secret", async () => {
     const dir = mkdtempSync(join(tmpdir(), "backfill-"));
     dirs.push(dir);
@@ -174,13 +243,28 @@ describe("backfill apply", () => {
   });
 });
 
-async function apply(path: string): Promise<Record<ExportTable, number>> {
+function seededPath(): string {
+  const dir = mkdtempSync(join(tmpdir(), "backfill-"));
+  dirs.push(dir);
+  const path = join(dir, "line.db");
+  const db = new DatabaseSync(path);
+  db.exec(SCHEMA);
+  seed(db);
+  db.close();
+  return path;
+}
+
+async function apply(
+  path: string,
+  options: { dryRun?: boolean; includeTestIds?: boolean } = {},
+): Promise<Record<ExportTable, number>> {
   const lines: string[] = [];
   const result = await runBackfill({
     endpoint: "http://localhost/export",
     sqlitePath: path,
     secret: "secret",
     limit: 1,
+    ...options,
     stdout: (line) => lines.push(line),
     fetchImpl: async (_url, init) => {
       const headers = new Headers(init?.headers);
@@ -193,7 +277,11 @@ async function apply(path: string): Promise<Record<ExportTable, number>> {
       return Response.json({ rows: slice, next });
     },
   });
-  assert.equal(lines.join("\n"), EXPORT_TABLES.map((table) => `${table}=${result[table]}`).join("\n"));
+  const skipped = options.includeTestIds ? 0 : 1;
+  assert.equal(
+    lines.join("\n"),
+    EXPORT_TABLES.map((table) => `${table}=${result[table]} skipped=${skipped}`).join("\n"),
+  );
   return result;
 }
 

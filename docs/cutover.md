@@ -77,9 +77,11 @@
    ```
 
    - `--endpoint` 只接受 `/export`，且只接受 https 或 localhost 的 http。
+   - `--dry-run` 只讀 `/export`，印出每表會套用的列數後結束，不開也不寫 SQLite。
+   - 預設略過 id 欄位以 `cftest` 結尾的列（workers.dev 量測腳本的假資料）。確定要匯入時才加 `--include-test-ids`。
    - 讀取分頁，每頁 200 列；整份套用在單一 transaction，失敗會 rollback。
    - 重跑安全：`user`、`group` 以 `id` upsert；`group_user`、`user_settings` 以 `(gid, uid)`、`(group_id, user_id)` upsert；`user_keyword` 以 `(id, keyword)` upsert；`keywords_logs` 以 `_id` 插入；`keyword_tombstone`、`group_user_tombstone` 執行 delete。
-   - 輸出的只有每表列數，不含訊息或關鍵字內容。
+   - 輸出的只有每表列數與略過列數（`table=N skipped=M`），不含訊息或關鍵字內容。
 
 5. 確認 NAS 的表格列數與抽查內容後，再恢復 NAS 寫入。
 6. 比對幾個關鍵表：`user`、`group`、`group_user`、`user_settings`、`user_keyword`、`keywords_logs`。
@@ -93,7 +95,19 @@
 - hydrate 進來的历史列也會被 upsert 一次；值本來就和 NAS 相同，重跑無害。`name`、`create_on`、`update_on` 為 NULL 時不會蓋掉 NAS 既有的值。
 - 讀取量等於匯出的列數。以近一年活躍量估算（約 80 個群組、2,600 筆成員、830 位使用者、少量設定與關鍵字變更）約 **4,000 列**，遠低於每日 5M rows read。
 
-## 5. 已知風險
+## 5. 回滾後重切
+
+回滾過一次後，`global-c` 的熱 SQL 可能比 NAS 新。要再切回 Workers 時，換一個新的 DO 名稱重新開始，不要沿用舊物件。
+
+1. **（可選）先 backfill 回 NAS。** 若回滾後還要保留 Workers 期間的熱資料，依第 4 節把 `global-c` 的熱表寫回 NAS。先跑 `--dry-run` 確認列數；預設略過 `cftest` 測試列。這一步只改 NAS，不動 `global-c`。
+2. **開小 PR 換名稱。** 把 `workers/src/blob-store.ts` 的 `COLD_BOT_STATE` 從 `"global-c"` 改成 `"global-d"`。`index.ts`、`bot-state.ts` 都匯入這個常數，其他程式不用改。合併後部署。
+   - 新物件一開始是空的，沒有舊的熱 SQL、關鍵字 cache 或 blob。
+   - 不清空 `global-c` 的原因：DO 沒有刪除整個物件的端點；逐列 `deleteAll()` 或 `DELETE` 都算 rows written，清掉半份資料約 10 萬列，會吃光當日 100,000 列額度。留著舊物件零寫入，還能查對照。
+3. **重傳全部 blob。** 部署完成後，`/import/kv` 會寫進 `global-d`，再跑一次 [import.md](import.md) 第 2 節的建置與上傳。實測 4,718 個 key、value 50.76 MB、key 0.18 MB，約 4,800 rows written（不到每日額度的 5%）。上傳後檢查 `/healthz`、`/export` 各表列數，並用模擬 webhook 驗證 hydrate。
+4. **最後才切 webhook。** 依第 2 節切換，切完盯 15 分鐘。
+5. **舊物件留著不刪。** `global`、`global-c` 都保留。每一代冷 blob 約 50.95 MB（`global-c` 實測，其餘同量級估算）；熱 SQL 只算 hydrate 過的列，用整份 NAS SQLite 73.1 MB 當上限。三個世代合計約 372 MB，約 5 GB 帳號上限的 7%，也遠低於單一物件 10 GB 上限。需要查舊資料時，暫時把 `COLD_BOT_STATE` 指回舊名稱並重新部署即可；正式路徑只指向最新一代。
+
+## 6. 已知風險
 
 - 回滾要在 NAS 停止寫入時套用，否則兩邊會互相覆蓋。
 - `keyword_tombstone` 只反映切換後的刪除。切換前的刪除已經在 blob 建置時反映，不會出現在這裡。
