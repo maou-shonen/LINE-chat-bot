@@ -3,8 +3,13 @@
   "name": "line-chat-bot",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-19",
-  // workers.dev only until cutover. Do not add linebot.maou.app or any route without the user online.
+  // workers.dev stays as a fallback after the cutover.
   "workers_dev": true,
+  // Deploying this config is the cutover. A non-interactive `wrangler deploy` creates the
+  // custom domain and passes override_existing_dns_record=true, replacing the existing
+  // linebot.maou.app CNAME. Removing this entry later does NOT delete the domain: wrangler
+  // only publishes custom domains when the list is non-empty. Roll back via API/dashboard.
+  "routes": [{ "pattern": "linebot.maou.app", "custom_domain": true }],
   // Opt-in diagnostic logging. Values are fixed phase names and numbers only.
   "vars": {
     "PHASE_TIMING": "0"
@@ -34,8 +39,9 @@
   "env": {
     "staging": {
       "name": "line-chat-bot-staging",
-      // workers.dev only. Do not add linebot.maou.app or any production route.
+      // workers.dev only. routes is inherited from the top level, so clear it explicitly.
       "workers_dev": true,
+      "routes": [],
       // wrangler does not inherit vars. Keep the default off here too.
       "vars": {
         "PHASE_TIMING": "0"
